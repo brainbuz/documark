@@ -4,7 +4,7 @@ source 'https://rubygems.org'
 
 gem 'hexapdf'
 gem 'kramdown'
-gem 'psche'
+gem 'psyche'
 
 group :test do
   gem 'minitest'
