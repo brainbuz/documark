@@ -1,5 +1,13 @@
-# The Apache Software Foundation
-## Individual Contributor License Agreement ("Agreement") V2.0
+# Documark Contributor License Agreement
+
+Documark is an Open Source project. In the event that a need to license the code outside of the GNU General Public License arises, the project may do so without obligation to contributors beyond the terms of this agreement. Any royalties or fees from such licensing must be channeled through an established Open Source Foundation; examples include the Apache Foundation, the Free Software Foundation, the Software Freedom Conservancy, and the Mozilla Foundation.
+
+Initially, control over the project in this context shall reside with its original author, but in the future may be turned over to a successor or a committee of contributors, a body such as those named above, or a body created for the purpose of governing this project.
+
+The Apache Individual Contributor License Agreement follows and governs the mechanics of contribution. Where these introductory terms conflict with the Apache CLA, these terms take precedence.
+
+## The Apache Software Foundation
+### Individual Contributor License Agreement ("Agreement") V2.0
 
 http://www.apache.org/licenses/
 

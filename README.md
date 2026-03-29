@@ -1,2 +1,3 @@
 # documark
-Documark — extended Markdown for fully styled, structured documents. A prototype to define the spec — Focusing onHTML and PDF output today, with other targets like EPUB, DOCX, and RTF in the future. Designed to become the open word processing standard.
+
+Documark — extended Markdown for fully styled, structured documents. A prototype to define the spec — Focusing on HTML and PDF output, other targets like EPUB, in the future. Designed to become the open word processing standard.
