@@ -1,0 +1,139 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'slop'
+require 'kramdown'
+require_relative '../lib/documark/runtime'
+require_relative '../lib/documark/parser'
+require_relative '../lib/documark/config'
+require_relative '../lib/documark/render_html'
+require_relative '../lib/documark/render_pdf'
+
+extend Documark::Runtime
+extend Documark::Parser
+extend Documark::Config
+extend Documark::RenderHtml
+extend Documark::RenderPdf
+
+DEFAULT_RUNTIME_CONFIG = {
+  'browser' => '/usr/bin/google-chrome',
+  'default_layout' => File.expand_path('../lib/documark/default.dml', __dir__)
+}.freeze
+
+def merge_config(file_config, options)
+  merged = DEFAULT_RUNTIME_CONFIG.dup
+
+  [file_config, options].each do |source|
+    source.each do |key, value|
+      next if value.nil?
+      next if value.respond_to?(:empty?) && value.empty?
+      next if source.equal?(options) && %w[verbose debug].include?(key) && value == false
+
+      merged[key] = value
+    end
+  end
+
+  merged
+end
+
+def process_action(config, valid_targets)
+  %w[input output target].each do |required_key|
+    if config[required_key].nil? || config[required_key].to_s.strip.empty?
+      warn "Missing required option for process action: --#{required_key}"
+      exit 1
+    end
+  end
+
+  unless valid_targets.include?(config['target'])
+    warn "Invalid target '#{config['target']}'. Supported targets: #{valid_targets.join(', ')}"
+    exit 1
+  end
+
+  document = read_document(config['input'])
+  header = document['header']
+  doc = document['doc']
+  data = document['data']
+  layout = read_layout(doc, config)
+  layout['container_class'] = '' if %w[pdf epub].include?(config['target'])
+  page = render_page(config, layout, data, doc['body']) if %w[html pdf epub].include?(config['target'])
+
+  if config["verbose"]
+    puts "--- Header ---"
+    pp header
+    puts "--- Front Matter (#{doc["body"].bytesize} body bytes) ---"
+    pp data
+    puts "--- Config ---"
+    pp config
+  end
+
+  case config['target']
+  when 'pdf'
+    puts "print to #{config['output']}" if config['verbose']
+    render_pdf_with_browser(page, config['output'], config['browser'])
+  when 'html'
+    puts "write to #{config['output']}" if config['verbose']
+    write_page(config['output'], page)
+  when 'epub'
+    ordie { raise NotImplementedError.new("Target 'epub' will likely use the HTML intermediate pipeline but is not implemented yet (...)") }
+  when 'markdown', 'text'
+    puts "write #{config['target']} (markdown alias) to #{config['output']}" if config['verbose']
+    write_markdown_output(config['output'], doc['body'])
+  end
+end
+
+valid_actions = %w[process config_new template_new]
+action_index = ARGV.index { |token| valid_actions.include?(token) }
+
+if action_index.nil?
+  unless ARGV.include?('-h') || ARGV.include?('--help')
+    warn "Missing action. Usage: documark <action> @switches. Supported actions: #{valid_actions.join(', ')}"
+    exit 1
+  end
+  action = 'process'
+  cli_argv = ARGV.dup
+else
+  action = ARGV[action_index]
+  cli_argv = ARGV.dup
+  cli_argv.delete_at(action_index)
+end
+
+begin
+  opts = Slop.parse(cli_argv) do |o|
+    o.string  '-i', '--input',   'Input file'
+    o.string  '-o', '--output',  'Output file'
+    o.string  '-t', '--target',  'Target format ie html pdf'
+    o.string  '-b', '--browser', 'Browser path for headless PDF rendering'
+    o.bool    '-v', '--verbose', 'Verbose output'
+    o.string  '-c', '--config',  'Specify a config file'
+    o.bool    '-d', '--debug',   'Show full stack traces'
+    o.on      '-h', '--help',    'Show this message' do
+      puts o
+      exit
+    end
+  end
+rescue Slop::MissingRequiredOption => e
+  warn e.message
+  exit 1
+end
+
+options = opts.to_h.transform_keys(&:to_s)
+options['target'] = options['target'].to_s.downcase
+
+Documark::Runtime.debug = options['debug']
+
+file_config = read_config(options['config'])
+config = merge_config(file_config, options)
+
+valid_targets = %w[html pdf markdown text epub]
+
+case action
+when 'config_new'
+  Documark::Config.config_new
+when 'template_new'
+  Documark::Config.template_new(file_config, options)
+when 'process'
+  process_action(config, valid_targets)
+else
+  warn "Unsupported action '#{action}'. Supported actions: #{valid_actions.join(', ')}"
+  exit 1
+end

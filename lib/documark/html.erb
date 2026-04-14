@@ -1,0 +1,21 @@
+<!doctype html>
+<% entize = ->(value) { ERB::Util.html_escape(value.to_s) } %>
+<html lang="<%= entize.call(data['language'] || 'en') %>">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><%= entize.call(data['title']) %></title>
+<% Array(layout['stylesheets']).each do |stylesheet| %>
+  <link rel="stylesheet" href="<%= stylesheet %>">
+<% end %>
+
+<style>
+<%= layout['style'].to_s %>
+</style>
+</head>
+<body>
+  <div class="<%= layout['container_class'] %>">
+    <%= html %>
+  </div>
+</body>
+</html>
