@@ -31,12 +31,7 @@ build-iPhoneSimulator/
 # https://guides.cocoapods.org/using/using-cocoapods.html#should-i-check-the-pods-directory-into-source-control
 #
 # vendor/Pods/
-
-## Documentation cache and generated files:
-/.yardoc/
-/_yardoc/
-/doc/
-/rdoc/
+rdoc/
 
 ## Environment normalization:
 /.bundle/
@@ -71,3 +66,5 @@ Gemfile.lock
 # .rubocop-https?--*
 .copilot-instructions.md
 .vscode
+notes.txt
+

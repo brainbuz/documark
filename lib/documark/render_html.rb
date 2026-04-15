@@ -15,7 +15,7 @@ module Documark
     end
 
     def cleanup_markdown_output(content)
-      text = content.to_s
+      text = content.to_s.dup
       # Remove common kramdown attribute list syntax from block and inline usage.
       text.gsub!(/^[ \t]*\{:[^}\n]*\}[ \t]*\n/, '')
       text.gsub!(/[ \t]*\{:[^}\n]*\}/, '')
