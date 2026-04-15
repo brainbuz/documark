@@ -1,0 +1,10 @@
+!! documark document option=baz
+!! data
+---
+title: "A Simple DocuMark Document"
+language: 'en'
+---
+!! end
+# DocuMark Makes Word Processors Obsolete!
+
+A Document format that is human readable and human editable, with the style and formatting power of the best modern word processors and the simplicity of Markdown.
