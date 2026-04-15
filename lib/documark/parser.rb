@@ -51,6 +51,8 @@ module Documark
     def parse_data_section(content)
       return nil if content.nil? || content.strip.empty?
       data = Psych.safe_load(content, aliases: false)
+      return data unless data.is_a?(Hash)
+
       # lang is an alias of language
       data['language'] ||= data['lang'] if data.key?('lang')
       data

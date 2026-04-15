@@ -66,3 +66,5 @@ Gemfile.lock
 # .rubocop-https?--*
 .copilot-instructions.md
 .vscode
+notes.txt
+
