@@ -68,31 +68,20 @@ Typical pattern:
 
 ## Screen And Print
 
-Documark is trying to support both browser viewing and printable output.
+Screen presentation and print are different, the @media tags are a critical tool in targeting styling.
 
-That makes `@media screen` and `@media print` especially important.
+media tags and responsibilities:
 
-Typical responsibilities:
+- `@media all`: common formatting
+- `@media screen`: browser reading experience, responsive layout
+- `@media print`: print reading experience
+- `@page`: rules within `@media print` controlling: page geometry, print typography, margin handling, page break behavior
 
-- `@media screen`: browser reading experience, responsive layout, preview behavior
-- `@media print`: page geometry, print typography, margin handling, page break behavior
+### PDF Rendering And The Style Section
 
-If a layout uses the same CSS for everything, it will usually be harder to get good print output.
+The current prototype renders PDF by printing generated HTML through a Chromium-compatible browser. If the pipeline changes, CSS will still be used as a common styling language.
 
-## PDF Rendering And The Style Section
-
-The current prototype renders PDF by printing generated HTML through a Chromium-compatible browser.
-
-That means the style section directly affects PDF output.
-
-Important implications:
-
-- `@page` rules matter
-- print-mode typography matters
-- browser defaults matter unless you reset them
-- framework spacing can interfere with page geometry if left unmanaged
-
-The current implementation also omits `container_class` for PDF output. That is a practical decision: many container classes add horizontal padding that would stack on top of the margins already defined in `@page`.
+The current implementation also omits `container_class` for PDF output. That is a practical decision: container classes exist to add padding for browsing presentation that would stack on top of the margins defined in `@page`.
 
 ## Recommended Responsibilities For The Style Section
 
@@ -111,14 +100,21 @@ Depending on the layout, it may also define:
 - image sizing
 - page-break behavior for headings, tables, and figures
 
-## Example Pattern
+## Example
 
 ```css
-@media screen {
-  /* screen preview defaults */
-}
 
-@media print {
+@charset "UTF-8";
+/*
+  Load Roboto for heading levels.
+  Keeping this in CSS makes the font setup part of the layout itself.
+*/
+@import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap');
+
+@media all {
+  /*
+    Shared defaults for both screen preview and print output.
+  */
   body {
     font-family: Georgia, "Times New Roman", Times, serif;
     font-size: 11pt;
@@ -126,29 +122,58 @@ Depending on the layout, it may also define:
     color: #000;
   }
 
+  /* Headings use Roboto, matching the Google Fonts example style block. */
+  h1, h2, h3, h4, h5, h6 {
+    font-family: "Roboto", sans-serif;
+    font-optical-sizing: auto;
+    font-weight: 600;
+    font-style: normal;
+    font-variation-settings: "wdth" 100;
+  }
+}
+
+@media screen {
+  /*
+    Screen-only container behavior.
+    This pairs with `container_class: container` in layout front matter.
+  */
+  .container {
+    max-width: 840px;
+    margin: 2rem auto;
+    padding: 0 1.25rem;
+  }
+}
+
+@media print {
+  /* PDF and print geometry. */
   @page {
     size: letter portrait;
     margin: 1in;
   }
 
+  /* Reset browser print margins so @page controls spacing cleanly. */
   html, body {
     margin: 0;
     padding: 0;
   }
 
+  /* Avoid separating top-level headings from their first following content. */
   h1, h2, h3 {
     page-break-after: avoid;
   }
 
+  /* Reduce awkward single lines at top/bottom of printed pages. */
   p, li, blockquote {
     orphans: 3;
     widows: 3;
   }
 
+  /* Keep structural blocks intact across page breaks when possible. */
   pre, blockquote, table, figure {
     page-break-inside: avoid;
   }
 
+  /* Print links as regular text styling. */
   a {
     color: #000;
     text-decoration: none;
@@ -186,7 +211,7 @@ The style section is the right place to override those defaults.
 
 ## Custom CSS
 
-The stylesheets key in the front matter allows you to use your own css, which can be compiled from scss. You can certainly move all of the styling to your custom sheet, in wich case the style section can just be some blank lines.
+The `stylesheets` key in the front matter allows you to use your own CSS, which can be compiled from SCSS. You can certainly move all of the styling to your custom sheet, in which case the style section can just be a blank line.
 
 ## Related Documents
 

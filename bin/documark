@@ -6,12 +6,14 @@ require 'kramdown'
 require_relative '../lib/documark/runtime'
 require_relative '../lib/documark/parser'
 require_relative '../lib/documark/config'
+require_relative '../lib/documark/export_clean'
 require_relative '../lib/documark/render_html'
 require_relative '../lib/documark/render_pdf'
 
 extend Documark::Runtime
 extend Documark::Parser
 extend Documark::Config
+extend Documark::ExportClean
 extend Documark::RenderHtml
 extend Documark::RenderPdf
 

@@ -92,4 +92,29 @@ class DocumarkParserTest < Minitest::Test
       assert_includes parsed['style'], '@media print'
     end
   end
+
+  def test_read_document_warns_and_defaults_title_when_data_section_is_missing
+    Dir.mktmpdir('documark-parser-test') do |tmpdir|
+      input_path = File.join(tmpdir, 'no-data.dm')
+      File.write(input_path, <<~DOC)
+        !! documark document
+        !! layout
+        ---
+        container_class: container
+        ---
+        @media print {}
+        !! end
+
+        # Body
+      DOC
+
+      document = nil
+      stderr = capture_io do
+        document = Documark::Parser.read_document(input_path)
+      end.last
+
+      assert_equal 'no-data.dm', document['data']['title']
+      assert_match(/No data section found; defaulting title to no-data\.dm/, stderr)
+    end
+  end
 end
