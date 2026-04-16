@@ -38,13 +38,19 @@ module Documark
       content = ordie { File.read(input_path) }
       header = read_header(content)
       doc = split_documark_sections(content)
-      raise 'missing frontmatter section' if doc["data"].nil?
+      data = parse_data_section(doc["data"])
+
+      if doc["data"].nil?
+        data = {}
+        data["title"] = File.basename(input_path)
+        warn "No data section found; defaulting title to #{data['title']}"
+      end
 
       {
         "content" => content,
         "header" => header,
         "doc" => doc,
-        "data" => parse_data_section(doc["data"])
+        "data" => data
       }
     end
 

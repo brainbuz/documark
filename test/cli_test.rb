@@ -106,16 +106,22 @@ class DocumarkCliTest < Minitest::Test
     end
   end
 
-  def test_fails_when_frontmatter_data_section_is_missing
-    _stdout, stderr, status = run_cli(
-      'process',
-      '--input', fixture_path('fmerrormissing.dm'),
-      '--output', '/tmp/out.html',
-      '--target', 'html'
-    )
+  def test_warns_and_defaults_title_when_data_section_is_missing
+    Dir.mktmpdir('documark-cli-test') do |tmpdir|
+      output_path = File.join(tmpdir, 'out.html')
 
-    refute status.success?
-    assert_includes stderr, 'missing frontmatter section'
+      _stdout, stderr, status = run_cli(
+        'process',
+        '--input', fixture_path('fmerrormissing.dm'),
+        '--output', output_path,
+        '--target', 'html'
+      )
+
+      assert status.success?, stderr
+      assert_includes stderr, 'No data section found; defaulting title to fmerrormissing.dm'
+      html = File.read(output_path)
+      assert_includes html, '<title>fmerrormissing.dm</title>'
+    end
   end
 
   def test_fails_when_data_section_is_unterminated
