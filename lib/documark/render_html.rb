@@ -3,6 +3,7 @@
 require 'erb'
 require 'kramdown'
 require_relative 'runtime'
+require_relative 'tag_processor'
 
 module Documark
   module RenderHtml
@@ -15,7 +16,9 @@ module Documark
     end
 
     def render_page(options, layout, data, body)
-      html = Kramdown::Document.new(body).to_html
+      prepped, registry = Documark::TagProcessor.preprocess(body)
+      html = Kramdown::Document.new(prepped).to_html
+      html = Documark::TagProcessor.postprocess(html, registry)
       compose_html(options, layout, data, html)
     end
 

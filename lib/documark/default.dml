@@ -3,10 +3,11 @@
 ---
 
 # Pico styles semantic HTML directly, so headings, paragraphs, lists, tables,
-# and code blocks look reasonable without adding framework-specific classes. # Other good options for Markdown-oriented documents include Sakura, MVP.css,# and Simple.css if you want a different visual tone with the same
-# semantic-HTML-first approach. If you want to use a non-semantic
-# framework, see https://kramdown.gettalong.org/quickref.html#block-attributes
-# to embed classes in your markdown.
+# and code blocks look reasonable without adding framework-specific classes.
+# Other good options for Markdown-oriented documents include Sakura, MVP.css,
+# and Simple.css if you want a different visual tone with the same
+# semantic-HTML-first approach. To apply classes to blocks or use semantic
+# HTML elements, use Documark's @{} and @[] tag syntax.
 
   stylesheets:
   - "https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
