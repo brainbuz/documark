@@ -10,8 +10,23 @@ module Documark
     def cleanup_markdown_output(content)
       text = content.to_s.dup
       # Remove common kramdown attribute list syntax from block and inline usage.
-      text.gsub!(/^[ \t]*\{:[^}\n]*\}[ \t]*\n/, '')
-      text.gsub!(/[ \t]*\{:[^}\n]*\}/, '')
+      # (Kramdown extension syntax is unsupported in Documark; these lines are
+      # kept for reference only and are not applied.)
+      # text.gsub!(/^[ \t]*\{:[^}\n]*\}[ \t]*\n/, '')
+      # text.gsub!(/[ \t]*\{:[^}\n]*\}/, '')
+
+      # Remove @{} block/section open tags and close markers — @{ attrs } or @{}
+      text.gsub!(/^[ \t]*@\{[^}]*\}[ \t]*\n/, '')
+      text.gsub!(/@\{[^}]*\}/, '')
+
+      # Remove @[element attrs] open tags and @[/element] close tags
+      text.gsub!(/^[ \t]*@\[[^\]]*\][ \t]*\n/, '')
+      text.gsub!(/@\[[^\]]*\]/, '')
+
+      # Remove @<element attrs> open tags and @</element> close tags
+      text.gsub!(/^[ \t]*@<[^>]*>[ \t]*\n/, '')
+      text.gsub!(/@<[^>]*>/, '')
+
       text
     end
 

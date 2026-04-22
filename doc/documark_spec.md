@@ -152,7 +152,21 @@ For maximum forward compatibility, the body of a Documark document SHOULD use:
 - Widely adopted extensions such as GFM tables and fenced code blocks
 - Documark's own `@{}`, `@<>`, and `@[]` tag syntax for styling and semantic structure
 
-### 6.1 Style Recommendations
+### 6.1 Markdown Extension Lineage
+
+Understanding where GFM's extensions come from is useful context for what "widely adopted" means in practice.
+
+The original Markdown specification (John Gruber, 2004) defined core inline and block constructs but deliberately left many document features unspecified. Several independent projects extended it:
+
+**PHP Markdown Extra** (Michel Fortin, ~2004) introduced tables, definition lists, footnotes, fenced code blocks (using `~~~`), and inline attribute syntax. Many later Markdown processors, including Kramdown, credit PHP Markdown Extra as the source for these features.
+
+**CommonMark** (John MacFarlane et al., 2014–) is a formal specification that resolves ambiguities in the original Markdown spec. It defines precise parsing rules for the core feature set but does not standardize extensions. CommonMark is the best available reference for what portable baseline Markdown means.
+
+**GitHub Flavored Markdown (GFM)** (GitHub, 2017–) is a CommonMark superset. It standardizes tables (adapted from PHP Markdown Extra), fenced code blocks with backtick syntax, strikethrough, task lists, and autolinks. GFM is the de facto standard for the extension layer because of GitHub's ubiquity.
+
+When this document says "GFM tables and fenced code blocks," it means these features as widely understood across tools — not a strict conformance requirement against the GFM specification document.
+
+### 6.2 Style Recommendations
 
 These are recommendations, not format rules. They are intended to improve readability, portability, and consistency across Documark documents.
 
