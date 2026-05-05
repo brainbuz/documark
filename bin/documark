@@ -71,7 +71,8 @@ def process_action(config, valid_targets)
   case config['target']
   when 'pdf'
     puts "print to #{config['output']}" if config['verbose']
-    render_pdf_with_browser(page, config['output'], config['browser'])
+    # render_pdf_with_browser(page, config['output'], config['browser'])
+    render_pdf_with_weasy(page, config['output'], config['browser'])
   when 'html'
     puts "write to #{config['output']}" if config['verbose']
     write_page(config['output'], page)

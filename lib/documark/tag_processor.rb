@@ -8,18 +8,25 @@ module Documark
     SEMANTIC_TAG_RE   = /\A@\[([a-zA-Z][a-zA-Z0-9_-]*)([^\]]*)\]\z/
     # Matches a @[/element] closing line
     SEMANTIC_CLOSE_RE = /\A@\[\/([a-zA-Z][a-zA-Z0-9_-]*)\]\z/
+    # Matches a @(name) Documark directive line
+    DIRECTIVE_RE      = /\A@\(([a-z][a-z0-9-]*)\s*\)\z/
     # Finds placeholders in post-processed HTML
     PLACEHOLDER_RE    = /<!--DMTAG(\d+)-->/
     # Sentinel used internally to protect \@ escape sequences during inline processing
     ESCAPE_SENTINEL   = "\x00DMAT\x00"
+
+    DEFAULT_TOC_DEPTH = 3
 
     module_function
 
     # Phase 1: replace @{} and @[] directives with HTML comment placeholders.
     # Returns [body_with_placeholders, registry] where registry maps int → HTML string.
     # Markdown content is left untouched so Kramdown processes it normally.
-    def preprocess(body)
-      Preprocessor.new(body).run
+    #
+    # opts may contain:
+    #   "toc" => { "depth" => Integer (default 3), "title" => String|nil }
+    def preprocess(body, opts = {})
+      Preprocessor.new(body, opts || {}).run
     end
 
     # Phase 2: substitute placeholders emitted by preprocess with actual HTML tags.
@@ -29,8 +36,8 @@ module Documark
 
     # Convenience method: preprocess + postprocess without Kramdown in between.
     # Used directly by unit tests; real rendering goes through render_html.rb.
-    def process(body)
-      prepped, registry = preprocess(body)
+    def process(body, opts = {})
+      prepped, registry = preprocess(body, opts || {})
       postprocess(prepped, registry)
     end
 
@@ -63,11 +70,13 @@ module Documark
     # Internal: walks the body line-by-line, replacing @{} and @[] directives
     # with HTML comment placeholders and recording the real tags in a registry.
     class Preprocessor
-      def initialize(body)
-        @lines    = body.lines(chomp: true)
-        @registry = {}
-        @n        = 0
-        @out      = []
+      def initialize(body, opts = {})
+        @lines       = body.lines(chomp: true)
+        @registry    = {}
+        @n           = 0
+        @out         = []
+        @opts        = opts
+        @toc_emitted = false
       end
 
       def run
@@ -78,6 +87,9 @@ module Documark
           if line.start_with?('\\@')
             # Escaped @-sigil: strip the backslash, pass through as literal text
             @out << @lines[i].sub('\\@', '@')
+            i += 1
+          elsif (m = line.match(DIRECTIVE_RE))
+            emit_directive(m[1])
             i += 1
           elsif (m = line.match(BLOCK_TAG_RE))
             attrs        = TagProcessor.build_attrs(m[1])
@@ -164,6 +176,51 @@ module Documark
         @registry[key] = html
         @n            += 1
         "<!--DMTAG#{key}-->"
+      end
+
+      # Dispatch a @(name) directive to its expansion handler.
+      def emit_directive(name)
+        case name
+        when 'toc'
+          emit_toc
+        else
+          raise StandardError, "Unknown Documark directive: @(#{name})"
+        end
+      end
+
+      # Expand @(toc) into:
+      #   <nav id="toc">                       (placeholder, opaque to Kramdown)
+      #     <h2 class="toc-title">{title}</h2> (placeholder, only if title set)
+      #     * TOC                              (Kramdown TOC marker; emits <ul id="markdown-toc">)
+      #     {:toc}
+      #   </nav>                               (placeholder)
+      #
+      # The depth (h1..hN) is controlled by the layout's toc.depth setting.
+      # We honor it by injecting Kramdown's document option once at the top
+      # of the output. Only one @(toc) per document is permitted; a second
+      # occurrence is a hard error.
+      def emit_toc
+        raise StandardError, "Multiple @(toc) directives are not supported" if @toc_emitted
+
+        toc_opts = @opts.is_a?(Hash) ? (@opts['toc'] || {}) : {}
+        depth    = (toc_opts['depth'] || DEFAULT_TOC_DEPTH).to_i
+        title    = toc_opts['title']
+
+        # Kramdown reads toc_levels as a document-level option. Inject it at
+        # the very top of the output so it applies before the {:toc} marker.
+        @out.unshift(%({::options toc_levels="1..#{depth}" /}), "")
+
+        @out << placeholder(%(<nav id="toc">))
+        if title && !title.to_s.strip.empty?
+          @out << placeholder(%(<h2 class="toc-title">#{title}</h2>))
+        end
+        @out << ""
+        @out << "* TOC"
+        @out << "{:toc}"
+        @out << ""
+        @out << placeholder("</nav>")
+
+        @toc_emitted = true
       end
 
       # Replace inline @{} span markers with placeholders.

@@ -24,6 +24,19 @@
 /* The default */
 }
 
+/* Default font stack. The serif and monospace families listed here are
+   chosen to be widely available across Linux distributions, macOS, and
+   Windows, and to be picked up by both Chromium and WeasyPrint without
+   downloading webfonts. Override --doc-font-* in a document layout to
+   change the typeface. */
+:root {
+  --doc-font-serif: "Liberation Serif", "Times New Roman", "DejaVu Serif", "Noto Serif", serif;
+  --doc-font-mono:  "Liberation Mono",  "Courier New",     "DejaVu Sans Mono", "Noto Sans Mono", monospace;
+}
+
+body { font-family: var(--doc-font-serif); }
+code, pre, kbd, samp { font-family: var(--doc-font-mono); }
+
 @media print {
 
   /* Pico reads typography from root custom properties. Overriding these in

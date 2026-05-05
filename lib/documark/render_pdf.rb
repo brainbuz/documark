@@ -36,5 +36,23 @@ module Documark
         end
       end
     end
+
+    def render_pdf_with_weasy(page, output_path, _unused = nil)
+      ordie do
+        Tempfile.create(['documark-', '.html']) do |tmp|
+          tmp.write(page)
+          tmp.flush
+
+          args = ['weasyprint', tmp.path, output_path]
+
+          _stdout, stderr, status = Open3.capture3(*args)
+          unless status.success?
+            raise StandardError, "PDF render failed (exit #{status.exitstatus})\n" \
+                                 "Command: #{args.join(' ')}\n" \
+                                 "Stderr: #{stderr.strip}"
+          end
+        end
+      end
+    end
   end
 end

@@ -16,7 +16,7 @@ module Documark
     end
 
     def render_page(options, layout, data, body)
-      prepped, registry = Documark::TagProcessor.preprocess(body)
+      prepped, registry = Documark::TagProcessor.preprocess(body, layout || {})
       html = Kramdown::Document.new(prepped).to_html
       html = Documark::TagProcessor.postprocess(html, registry)
       compose_html(options, layout, data, html)

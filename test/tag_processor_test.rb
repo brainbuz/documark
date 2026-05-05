@@ -257,4 +257,88 @@ class TagProcessorTest < Minitest::Test
     assert_includes result, '@<u>'
     assert_includes result, 'word more text.'
   end
+
+  # ---------------------------------------------------------------------------
+  # @(toc) directive
+  # ---------------------------------------------------------------------------
+
+  def test_toc_directive_emits_nav_wrapper_and_kramdown_marker
+    body = "@(toc)\n"
+    result = Documark::TagProcessor.process(body)
+    assert_includes result, '<nav id="toc">'
+    assert_includes result, '</nav>'
+    assert_includes result, '* TOC'
+    assert_includes result, '{:toc}'
+  end
+
+  def test_toc_directive_injects_default_depth_option
+    body = "@(toc)\n"
+    result = Documark::TagProcessor.process(body)
+    assert_includes result, '{::options toc_levels="1..3" /}'
+  end
+
+  def test_toc_directive_honors_layout_depth
+    body = "@(toc)\n"
+    result = Documark::TagProcessor.process(body, 'toc' => { 'depth' => 2 })
+    assert_includes result, '{::options toc_levels="1..2" /}'
+  end
+
+  def test_toc_directive_uses_default_depth_when_partial_toc_block
+    # toc block exists but only sets title; depth must fall back to default.
+    body = "@(toc)\n"
+    result = Documark::TagProcessor.process(body, 'toc' => { 'title' => 'Contents' })
+    assert_includes result, '{::options toc_levels="1..3" /}'
+  end
+
+  def test_toc_directive_omits_title_when_partial_toc_block
+    # toc block exists but only sets depth; title must remain unset.
+    body = "@(toc)\n"
+    result = Documark::TagProcessor.process(body, 'toc' => { 'depth' => 2 })
+    refute_includes result, 'toc-title'
+  end
+
+  def test_toc_directive_works_with_empty_layout_hash
+    body = "@(toc)\n"
+    result = Documark::TagProcessor.process(body, {})
+    assert_includes result, '{::options toc_levels="1..3" /}'
+    refute_includes result, 'toc-title'
+  end
+
+  def test_toc_directive_works_with_nil_opts
+    body = "@(toc)\n"
+    # nil should be treated as "no opts at all" without raising
+    result = Documark::TagProcessor.process(body, nil)
+    assert_includes result, '{::options toc_levels="1..3" /}'
+    refute_includes result, 'toc-title'
+  end
+
+  def test_toc_directive_emits_title_when_set
+    body = "@(toc)\n"
+    result = Documark::TagProcessor.process(body, 'toc' => { 'title' => 'Contents' })
+    assert_includes result, '<h2 class="toc-title">Contents</h2>'
+  end
+
+  def test_toc_directive_omits_title_when_unset
+    body = "@(toc)\n"
+    result = Documark::TagProcessor.process(body)
+    refute_includes result, 'toc-title'
+  end
+
+  def test_toc_directive_omits_title_when_blank
+    body = "@(toc)\n"
+    result = Documark::TagProcessor.process(body, 'toc' => { 'title' => '   ' })
+    refute_includes result, 'toc-title'
+  end
+
+  def test_toc_directive_raises_on_second_occurrence
+    body = "@(toc)\n\nIntro.\n\n@(toc)\n"
+    error = assert_raises(StandardError) { Documark::TagProcessor.process(body) }
+    assert_match(/multiple .*@\(toc\)/i, error.message)
+  end
+
+  def test_unknown_directive_raises
+    body = "@(bogus)\n"
+    error = assert_raises(StandardError) { Documark::TagProcessor.process(body) }
+    assert_match(/unknown.*directive/i, error.message)
+  end
 end
