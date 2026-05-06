@@ -10,8 +10,10 @@ module Documark
     SEMANTIC_CLOSE_RE = /\A@\[\/([a-zA-Z][a-zA-Z0-9_-]*)\]\z/
     # Matches a @(name) Documark directive line
     DIRECTIVE_RE      = /\A@\(([a-z][a-z0-9-]*)\s*\)\z/
-    # Finds placeholders in post-processed HTML
-    PLACEHOLDER_RE    = /<!--DMTAG(\d+)-->/
+    # Finds self-describing placeholders in post-processed HTML.
+    # The HTML to be restored is encoded directly inside the comment between
+    # the :DMTAG markers, eliminating the need for a side-table registry.
+    PLACEHOLDER_RE    = /<!--DMTAG:(.*?):DMTAG-->/m
     # Sentinel used internally to protect \@ escape sequences during inline processing
     ESCAPE_SENTINEL   = "\x00DMAT\x00"
 
@@ -19,9 +21,9 @@ module Documark
 
     module_function
 
-    # Phase 1: replace @{} and @[] directives with HTML comment placeholders.
-    # Returns [body_with_placeholders, registry] where registry maps int → HTML string.
-    # Markdown content is left untouched so Kramdown processes it normally.
+    # Phase 1: replace @{} and @[] directives with self-describing HTML
+    # comment placeholders. Returns the transformed body string. Markdown
+    # content is left untouched so Kramdown processes it normally.
     #
     # opts may contain:
     #   "toc" => { "depth" => Integer (default 3), "title" => String|nil }
@@ -29,16 +31,33 @@ module Documark
       Preprocessor.new(body, opts || {}).run
     end
 
-    # Phase 2: substitute placeholders emitted by preprocess with actual HTML tags.
-    def postprocess(html, registry)
-      html.gsub(PLACEHOLDER_RE) { registry[Regexp.last_match(1).to_i] || Regexp.last_match(0) }
+    # Phase 2: substitute placeholders emitted by preprocess with the HTML
+    # encoded inside each placeholder's comment body.
+    def postprocess(html)
+      html.gsub(PLACEHOLDER_RE) { Regexp.last_match(1) }
     end
 
     # Convenience method: preprocess + postprocess without Kramdown in between.
     # Used directly by unit tests; real rendering goes through render_html.rb.
     def process(body, opts = {})
-      prepped, registry = preprocess(body, opts || {})
-      postprocess(prepped, registry)
+      postprocess(preprocess(body, opts || {}))
+    end
+
+    # Wrap an HTML fragment in a self-describing comment placeholder.
+    #
+    # Returns the placeholder string on success, or nil if the fragment
+    # cannot be safely encoded. Currently the only rejection rule is the
+    # presence of '--' (forbidden inside HTML comments). A nil return is
+    # the caller's signal to fall back to passing the original source
+    # line through as literal text. We warn but do not raise: a single
+    # malformed attribute should not abort an entire document.
+    def make_placeholder(html)
+      if html.include?('--')
+        warn "documark: ignoring tag with invalid '--' in attribute value: #{html.inspect}"
+        return nil
+      end
+
+      "<!--DMTAG:#{html}:DMTAG-->"
     end
 
     # Parse @{} / @[] attribute string into an HTML attribute string.
@@ -68,12 +87,10 @@ module Documark
     end
 
     # Internal: walks the body line-by-line, replacing @{} and @[] directives
-    # with HTML comment placeholders and recording the real tags in a registry.
+    # with self-describing HTML comment placeholders.
     class Preprocessor
       def initialize(body, opts = {})
         @lines       = body.lines(chomp: true)
-        @registry    = {}
-        @n           = 0
         @out         = []
         @opts        = opts
         @toc_emitted = false
@@ -166,16 +183,17 @@ module Documark
           end
         end
 
-        [@out.join("\n"), @registry]
+        @out.join("\n")
       end
 
       private
 
+      # Wrap make_placeholder so callers can append the result unconditionally:
+      # an invalid fragment (warned and dropped by make_placeholder) becomes
+      # an empty string, so the surrounding tag silently disappears while the
+      # content it would have wrapped still renders.
       def placeholder(html)
-        key           = @n
-        @registry[key] = html
-        @n            += 1
-        "<!--DMTAG#{key}-->"
+        TagProcessor.make_placeholder(html) || ""
       end
 
       # Dispatch a @(name) directive to its expansion handler.

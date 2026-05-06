@@ -341,4 +341,49 @@ class TagProcessorTest < Minitest::Test
     error = assert_raises(StandardError) { Documark::TagProcessor.process(body) }
     assert_match(/unknown.*directive/i, error.message)
   end
+
+  # ---------------------------------------------------------------------------
+  # Self-describing placeholder format
+  # ---------------------------------------------------------------------------
+
+  def test_make_placeholder_wraps_html_in_comment
+    ph = Documark::TagProcessor.make_placeholder('<div class="green">')
+    assert_equal '<!--DMTAG:<div class="green">:DMTAG-->', ph
+  end
+
+  def test_make_placeholder_returns_nil_and_warns_on_double_dash
+    result = nil
+    _stdout, stderr = capture_io do
+      result = Documark::TagProcessor.make_placeholder('<div data-x="--bad-->">')
+    end
+    assert_nil result
+    assert_match(/ignoring tag/i, stderr)
+    assert_match(/--/, stderr)
+  end
+
+  def test_invalid_data_attribute_drops_tag_keeps_content
+    # Content inside the offending tag should still render; the wrapper
+    # silently disappears (with a stderr warning) rather than aborting.
+    body = "@[aside data-x=\"--bad-->\"]\n\nThe content survives.\n\n@[/aside]"
+    result = nil
+    _stdout, stderr = capture_io do
+      result = Documark::TagProcessor.process(body)
+    end
+    refute_includes result, '<aside'
+    assert_includes result, 'The content survives.'
+    assert_match(/ignoring tag/i, stderr)
+  end
+
+  def test_postprocess_round_trips_self_describing_comment
+    placeholder = Documark::TagProcessor.make_placeholder('<aside class="note">')
+    surrounded  = "before #{placeholder} after"
+    assert_equal 'before <aside class="note"> after', Documark::TagProcessor.postprocess(surrounded)
+  end
+
+  def test_postprocess_handles_multiple_placeholders
+    open_ph  = Documark::TagProcessor.make_placeholder('<u>')
+    close_ph = Documark::TagProcessor.make_placeholder('</u>')
+    surrounded = "x #{open_ph}word#{close_ph} y"
+    assert_equal 'x <u>word</u> y', Documark::TagProcessor.postprocess(surrounded)
+  end
 end
