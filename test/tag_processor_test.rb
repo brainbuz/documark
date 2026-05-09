@@ -386,4 +386,26 @@ class TagProcessorTest < Minitest::Test
     surrounded = "x #{open_ph}word#{close_ph} y"
     assert_equal 'x <u>word</u> y', Documark::TagProcessor.postprocess(surrounded)
   end
+
+  # ---------------------------------------------------------------------------
+  # Inline forms inside block forms (locks down the calling structure of
+  # the block scanner -- block content lines must still pass through the
+  # inline processor).
+  # ---------------------------------------------------------------------------
+
+  def test_inline_element_inside_semantic_block_section
+    body = "@[aside]\n\nThis @<u>word@</u> works.\n\n@[/aside]"
+    result = Documark::TagProcessor.process(body)
+    assert_includes result, '<aside>'
+    assert_includes result, '<u>word</u>'
+    assert_includes result, '</aside>'
+  end
+
+  def test_inline_span_inside_block_div_section
+    body = "@{ .green }\n\nA @{ .highlight } word @{} more text.\n\n@{}"
+    result = Documark::TagProcessor.process(body)
+    assert_includes result, '<div class="green">'
+    assert_includes result, '<span class="highlight">word</span>'
+    assert_includes result, '</div>'
+  end
 end

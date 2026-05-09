@@ -88,6 +88,11 @@ module Documark
 
     # Internal: walks the body line-by-line, replacing @{} and @[] directives
     # with self-describing HTML comment placeholders.
+    #
+    # Method-naming convention: methods prefixed with _ are internal helpers
+    # not intended for external use. They aren't marked private because
+    # nothing about calling them from outside would corrupt state, and the
+    # _ prefix is sufficient signal to readers.
     class Preprocessor
       def initialize(body, opts = {})
         @lines       = body.lines(chomp: true)
@@ -96,89 +101,40 @@ module Documark
         @toc_emitted = false
       end
 
+      # Single walk through the document. Block-level constructs (@(), @{},
+      # @[]) are detected here; their content lines are passed through the
+      # inline processor _inline so @<> and inline @{} spans get handled.
       def run
         i = 0
         while i < @lines.length
           line = @lines[i].strip
 
           if line.start_with?('\\@')
-            # Escaped @-sigil: strip the backslash, pass through as literal text
+            # Escaped @-sigil: strip the backslash, pass through as literal text.
             @out << @lines[i].sub('\\@', '@')
             i += 1
           elsif (m = line.match(DIRECTIVE_RE))
-            emit_directive(m[1])
+            _emit_directive(m[1])
             i += 1
           elsif (m = line.match(BLOCK_TAG_RE))
-            attrs        = TagProcessor.build_attrs(m[1])
-            section_mode = @lines[i + 1].nil? || @lines[i + 1].strip.empty?
-            open_ph      = placeholder("<div#{attrs}>")
-            close_ph     = placeholder("</div>")
-
-            if section_mode
-              @out << open_ph
-              @out << ""
-              i += 1
-              i += 1 while i < @lines.length && @lines[i].strip.empty?
-              while i < @lines.length
-                cur     = @lines[i].strip
-                close_m = cur.match(BLOCK_TAG_RE)
-                if close_m && close_m[1].strip.empty?
-                  @out << close_ph
-                  i += 1
-                  break
-                end
-                @out << inline(@lines[i])
-                i += 1
-              end
-            else
-              @out << open_ph
-              @out << ""
-              i += 1
-              while i < @lines.length && !@lines[i].strip.empty?
-                @out << inline(@lines[i])
-                i += 1
-              end
-              @out << ""
-              @out << close_ph
-            end
-
+            attrs = TagProcessor.build_attrs(m[1])
+            i = _scan_block(
+              start_index:    i,
+              open_html:      "<div#{attrs}>",
+              close_html:     "</div>",
+              close_detector: ->(stripped) { (cm = stripped.match(BLOCK_TAG_RE)) && cm[1].strip.empty? }
+            )
           elsif (m = line.match(SEMANTIC_TAG_RE))
-            element      = m[1]
-            attrs        = TagProcessor.build_attrs(m[2])
-            section_mode = @lines[i + 1].nil? || @lines[i + 1].strip.empty?
-            open_ph      = placeholder("<#{element}#{attrs}>")
-            close_ph     = placeholder("</#{element}>")
-
-            if section_mode
-              @out << open_ph
-              @out << ""
-              i += 1
-              i += 1 while i < @lines.length && @lines[i].strip.empty?
-              while i < @lines.length
-                cur     = @lines[i].strip
-                close_m = cur.match(SEMANTIC_CLOSE_RE)
-                if close_m && close_m[1] == element
-                  @out << close_ph
-                  i += 1
-                  break
-                end
-                @out << inline(@lines[i])
-                i += 1
-              end
-            else
-              @out << open_ph
-              @out << ""
-              i += 1
-              while i < @lines.length && !@lines[i].strip.empty?
-                @out << inline(@lines[i])
-                i += 1
-              end
-              @out << ""
-              @out << close_ph
-            end
-
+            element = m[1]
+            attrs   = TagProcessor.build_attrs(m[2])
+            i = _scan_block(
+              start_index:    i,
+              open_html:      "<#{element}#{attrs}>",
+              close_html:     "</#{element}>",
+              close_detector: ->(stripped) { (cm = stripped.match(SEMANTIC_CLOSE_RE)) && cm[1] == element }
+            )
           else
-            @out << inline(@lines[i])
+            @out << _inline(@lines[i])
             i += 1
           end
         end
@@ -186,21 +142,63 @@ module Documark
         @out.join("\n")
       end
 
-      private
+      # Scan a block-level construct starting at @lines[start_index] (which
+      # is the opener line). Decides section-mode vs single-block by whether
+      # the line right after the opener is blank. Emits open and close
+      # placeholders around the content lines, calling _inline on each
+      # content line so inline forms inside the block still get processed.
+      # Returns the new index (one past the matched close, or end-of-input).
+      def _scan_block(start_index:, open_html:, close_html:, close_detector:)
+        open_ph  = _placeholder(open_html)
+        close_ph = _placeholder(close_html)
 
-      # Wrap make_placeholder so callers can append the result unconditionally:
-      # an invalid fragment (warned and dropped by make_placeholder) becomes
-      # an empty string, so the surrounding tag silently disappears while the
-      # content it would have wrapped still renders.
-      def placeholder(html)
+        section_mode = @lines[start_index + 1].nil? || @lines[start_index + 1].strip.empty?
+        i = start_index + 1
+
+        @out << open_ph
+        @out << ""
+
+        if section_mode
+          # Skip blank lines between opener and content.
+          i += 1 while i < @lines.length && @lines[i].strip.empty?
+          while i < @lines.length
+            if close_detector.call(@lines[i].strip)
+              @out << close_ph
+              return i + 1
+            end
+            @out << _inline(@lines[i])
+            i += 1
+          end
+          # End of input without finding the close: emit close anyway and
+          # return. (Matches existing behavior — unterminated blocks still
+          # produce a closing placeholder.)
+          @out << close_ph
+          i
+        else
+          # Single-block mode: consume up to the next blank line.
+          while i < @lines.length && !@lines[i].strip.empty?
+            @out << _inline(@lines[i])
+            i += 1
+          end
+          @out << ""
+          @out << close_ph
+          i
+        end
+      end
+
+      # Build a placeholder, returning "" instead of nil so callers can
+      # append the result unconditionally. An invalid fragment (warned and
+      # dropped by make_placeholder) makes the surrounding tag silently
+      # disappear while the content it would have wrapped still renders.
+      def _placeholder(html)
         TagProcessor.make_placeholder(html) || ""
       end
 
       # Dispatch a @(name) directive to its expansion handler.
-      def emit_directive(name)
+      def _emit_directive(name)
         case name
         when 'toc'
-          emit_toc
+          _emit_toc
         else
           raise StandardError, "Unknown Documark directive: @(#{name})"
         end
@@ -217,7 +215,7 @@ module Documark
       # We honor it by injecting Kramdown's document option once at the top
       # of the output. Only one @(toc) per document is permitted; a second
       # occurrence is a hard error.
-      def emit_toc
+      def _emit_toc
         raise StandardError, "Multiple @(toc) directives are not supported" if @toc_emitted
 
         toc_opts = @opts.is_a?(Hash) ? (@opts['toc'] || {}) : {}
@@ -228,65 +226,87 @@ module Documark
         # the very top of the output so it applies before the {:toc} marker.
         @out.unshift(%({::options toc_levels="1..#{depth}" /}), "")
 
-        @out << placeholder(%(<nav id="toc">))
-        if title && !title.to_s.strip.empty?
-          @out << placeholder(%(<h2 class="toc-title">#{title}</h2>))
-        end
+        @out << _placeholder(%(<nav id="toc">))
+        @out << _placeholder(%(<h2 class="toc-title">#{title}</h2>)) if title && !title.to_s.strip.empty?
         @out << ""
         @out << "* TOC"
         @out << "{:toc}"
         @out << ""
-        @out << placeholder("</nav>")
+        @out << _placeholder("</nav>")
 
         @toc_emitted = true
       end
 
-      # Replace inline @{} span markers with placeholders.
-      # Explicit close:  @{ .foo } some words @{}  → span wrapping "some words"
-      # Unterminated:    @{ .foo } word             → span wrapping next word only
-      # Escaped:         \@{ .foo }                → literal @{ .foo } (backslash consumed)
-      def inline(line)
+      # Process inline tag forms inside a single line:
+      #   @{ .cls } word                 inline span wrapping the next word
+      #   @{ .cls } phrase @{}           inline span wrapping the phrase
+      #   @<el> word                     inline element wrapping the next word
+      #   @<el attrs> phrase @</el>      inline element wrapping the phrase
+      #   \@... (any of the above)       literal pass-through (backslash consumed)
+      def _inline(line)
         return line unless line.include?('@')
 
-        # Protect \@ escape sequences before any tag processing.
+        # Protect \@ escape sequences before any tag matching.
         result = line.gsub('\\@', ESCAPE_SENTINEL)
 
         if result.include?('@{')
-          result = result.gsub(/@\{([^}]+)\}(.*?)@\{\}/) do
-            open_ph  = placeholder("<span#{TagProcessor.build_attrs(Regexp.last_match(1))}>")
-            close_ph = placeholder("</span>")
-            "#{open_ph}#{Regexp.last_match(2).strip}#{close_ph}"
-          end
+          # @{ .cls } phrase @{}   → span around phrase (explicit close)
+          result = _wrap_inline(
+            result,
+            /@\{([^}]+)\}(.*?)@\{\}/,
+            open_html_for: ->(_m, attr_str) { "<span#{TagProcessor.build_attrs(attr_str)}>" },
+            close_html:    "</span>",
+            content_for:   ->(m) { m[2].strip }
+          )
 
-          result = result.gsub(/@\{([^}]+)\}\s*(\S+)/) do
-            open_ph  = placeholder("<span#{TagProcessor.build_attrs(Regexp.last_match(1))}>")
-            close_ph = placeholder("</span>")
-            "#{open_ph}#{Regexp.last_match(2)}#{close_ph}"
-          end
+          # @{ .cls } word         → span around the next word (no close)
+          result = _wrap_inline(
+            result,
+            /@\{([^}]+)\}\s*(\S+)/,
+            open_html_for: ->(_m, attr_str) { "<span#{TagProcessor.build_attrs(attr_str)}>" },
+            close_html:    "</span>",
+            content_for:   ->(m) { m[2] }
+          )
         end
 
         if result.include?('@<')
-          result = result.gsub(/@<([a-zA-Z][a-zA-Z0-9_-]*)([^>]*)>(.*?)@<\/\1>/) do
-            element  = Regexp.last_match(1)
-            attrs    = Regexp.last_match(2)
-            content  = Regexp.last_match(3).strip
-            open_ph  = placeholder("<#{element}#{TagProcessor.build_attrs(attrs)}>")
-            close_ph = placeholder("</#{element}>")
-            "#{open_ph}#{content}#{close_ph}"
-          end
+          # @<el attrs> phrase @</el>  → element around phrase (explicit close)
+          result = _wrap_inline(
+            result,
+            /@<([a-zA-Z][a-zA-Z0-9_-]*)([^>]*)>(.*?)@<\/\1>/,
+            open_html_for: ->(m, _attr_str) { "<#{m[1]}#{TagProcessor.build_attrs(m[2])}>" },
+            close_html_for: ->(m) { "</#{m[1]}>" },
+            content_for:    ->(m) { m[3].strip }
+          )
 
-          result = result.gsub(/@<([a-zA-Z][a-zA-Z0-9_-]*)([^>]*)>\s*(\S+)/) do
-            element  = Regexp.last_match(1)
-            attrs    = Regexp.last_match(2)
-            word     = Regexp.last_match(3)
-            open_ph  = placeholder("<#{element}#{TagProcessor.build_attrs(attrs)}>")
-            close_ph = placeholder("</#{element}>")
-            "#{open_ph}#{word}#{close_ph}"
-          end
+          # @<el attrs> word           → element around the next word (no close)
+          result = _wrap_inline(
+            result,
+            /@<([a-zA-Z][a-zA-Z0-9_-]*)([^>]*)>\s*(\S+)/,
+            open_html_for: ->(m, _attr_str) { "<#{m[1]}#{TagProcessor.build_attrs(m[2])}>" },
+            close_html_for: ->(m) { "</#{m[1]}>" },
+            content_for:    ->(m) { m[3] }
+          )
         end
 
-        # Restore escaped @-sigils (backslash consumed, bare @ remains)
+        # Restore escaped @-sigils (backslash consumed, bare @ remains).
         result.gsub(ESCAPE_SENTINEL, '@')
+      end
+
+      # Apply a single inline-form regex sweep, wrapping each match in
+      # placeholders for open and close tags. Used by _inline for all four
+      # inline forms (@{}-explicit, @{}-word, @<>-explicit, @<>-word).
+      #
+      # Either close_html (literal) or close_html_for (callable) must be
+      # supplied; close_html_for takes precedence when given.
+      def _wrap_inline(text, regex, open_html_for:, content_for:, close_html: nil, close_html_for: nil)
+        text.gsub(regex) do
+          m         = Regexp.last_match
+          attr_str  = m[1]
+          open_ph   = _placeholder(open_html_for.call(m, attr_str))
+          close_ph  = _placeholder(close_html_for ? close_html_for.call(m) : close_html)
+          "#{open_ph}#{content_for.call(m)}#{close_ph}"
+        end
       end
     end
   end

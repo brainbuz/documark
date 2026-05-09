@@ -421,3 +421,15 @@ Rules:
 
 It is strongly recommended that document authors escape any `@`-sigil-like text that appears in running prose or headings and is not intended as a directive — for example when describing Documark syntax within a Documark document. Processors are not required to detect or reject unescaped tag-like text that appears in non-directive positions; behaviour in such cases is not defined.
 
+## 9. Known Issues
+
+These are areas where current implementation behavior is not committed to the spec and is likely to change.
+
+### 9.1 In-Document Tags Inside Markdown Code Regions
+
+Documark's preprocessor currently scans tag syntax (`@{}`, `@[]`, `@<>`, `@()`) without regard to Markdown code spans (`` `...` ``) or fenced code blocks (```` ``` ````). Tag-like text inside code regions is processed as if it were running prose.
+
+This is undesirable: authors documenting Documark syntax inside a Documark document must escape every example with `\@`, even inside a code fence where the intent is plainly literal text.
+
+The likely future behaviour is for the preprocessor to recognise Markdown code spans and fences and skip them. Authors should for the present consider the behaviour of @tags in these regions to be undefined.
+
