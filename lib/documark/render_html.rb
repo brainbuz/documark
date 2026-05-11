@@ -16,7 +16,8 @@ module Documark
     end
 
     def render_page(options, layout, data, body)
-      prepped = Documark::TagProcessor.preprocess(body, layout || {})
+      opts    = (layout || {}).merge("input_path" => options["input"])
+      prepped = ordie { Documark::TagProcessor.preprocess(body, opts) }
       html    = Kramdown::Document.new(prepped).to_html
       html    = Documark::TagProcessor.postprocess(html)
       compose_html(options, layout, data, html)

@@ -10,6 +10,22 @@ module Documark
     SEMANTIC_CLOSE_RE = /\A@\[\/([a-zA-Z][a-zA-Z0-9_-]*)\]\z/
     # Matches a @(name) Documark directive line
     DIRECTIVE_RE      = /\A@\(([a-z][a-z0-9-]*)\s*\)\z/
+    # Matches @( include 'file' ) or @( include "file" ) with optional type.
+    # m[1]=path, m[2]=type (markdown|html|text) or nil.
+    INCLUDE_RE        = /\A@\(\s*include\s+['"]([^'"]+)['"]\s*(markdown|html|text)?\s*\)\z/
+    INCLUDE_MD_EXTS   = %w[.md .markdown].freeze
+    # Matches the full @(# term) index directive. m[1]=term phrase.
+    # Always emits an empty anchor; never wraps. Run BEFORE
+    # INDEX_SHORTHAND_RE so the @# opener of a full form isn't consumed
+    # by the shorthand regex.
+    INDEX_FULL_RE      = /@\(#\s*(.+?)\s*\)/
+    # Matches the @# shorthand: @# word. The "word" is one or more
+    # Unicode letter characters (\p{L}) — accented Latin and non-Latin
+    # scripts are all treated as letters. Anything that is NOT a letter
+    # (digits, punctuation, emoji, symbols, whitespace) terminates the
+    # word. Authors who need digits, punctuation, or symbols inside an
+    # index term must use the full form @(# term).
+    INDEX_SHORTHAND_RE = /@#\s*(\p{L}+)/
     # Finds self-describing placeholders in post-processed HTML.
     # The HTML to be restored is encoded directly inside the comment between
     # the :DMTAG markers, eliminating the need for a side-table registry.
@@ -26,7 +42,9 @@ module Documark
     # content is left untouched so Kramdown processes it normally.
     #
     # opts may contain:
-    #   "toc" => { "depth" => Integer (default 3), "title" => String|nil }
+    #   "toc"        => { "depth" => Integer (default 3), "title" => String|nil }
+    #   "input_path" => String  — absolute path to the source document; used to
+    #                             resolve relative @( include ) paths.
     def preprocess(body, opts = {})
       Preprocessor.new(body, opts || {}).run
     end
@@ -49,8 +67,7 @@ module Documark
     # cannot be safely encoded. Currently the only rejection rule is the
     # presence of '--' (forbidden inside HTML comments). A nil return is
     # the caller's signal to fall back to passing the original source
-    # line through as literal text. We warn but do not raise: a single
-    # malformed attribute should not abort an entire document.
+    # line through as literal text.
     def make_placeholder(html)
       if html.include?('--')
         warn "documark: ignoring tag with invalid '--' in attribute value: #{html.inspect}"
@@ -94,11 +111,19 @@ module Documark
     # nothing about calling them from outside would corrupt state, and the
     # _ prefix is sufficient signal to readers.
     class Preprocessor
-      def initialize(body, opts = {})
-        @lines       = body.lines(chomp: true)
-        @out         = []
-        @opts        = opts
-        @toc_emitted = false
+      def initialize(body, opts = {}, base_path: nil)
+        @lines          = body.lines(chomp: true)
+        @out            = []
+        @opts           = opts
+        @toc_emitted    = false
+        @index_emitted  = false
+        @index_entries  = []
+        @index_counter  = 0
+        # Base directory for resolving relative @( include ) paths.
+        # Falls back to opts["input_path"] if not given directly (used by
+        # recursive calls to carry the including file's directory).
+        input_path  = opts["input_path"]
+        @base_path  = base_path || (input_path ? File.dirname(File.expand_path(input_path)) : Dir.pwd)
       end
 
       # Single walk through the document. Block-level constructs (@(), @{},
@@ -112,6 +137,9 @@ module Documark
           if line.start_with?('\\@')
             # Escaped @-sigil: strip the backslash, pass through as literal text.
             @out << @lines[i].sub('\\@', '@')
+            i += 1
+          elsif (m = line.match(INCLUDE_RE))
+            _emit_include(m[1], m[2])
             i += 1
           elsif (m = line.match(DIRECTIVE_RE))
             _emit_directive(m[1])
@@ -199,9 +227,60 @@ module Documark
         case name
         when 'toc'
           _emit_toc
+        when 'index'
+          _emit_index
         else
           raise StandardError, "Unknown Documark directive: @(#{name})"
         end
+      end
+
+      # Expand @( include 'path' [type] ) by reading the file and splicing its
+      # preprocessed content into @out. The included file's own @() directives
+      # are processed because we recurse through a new Preprocessor whose
+      # state (toc_emitted, index_entries, etc.) is shared via the parent.
+      #
+      # type is one of 'markdown', 'html', 'text', or nil (auto-detect by ext).
+      # html  → raw content injected as a self-describing placeholder block.
+      # text  → content emitted as a fenced code block so Kramdown escapes it.
+      # markdown (or auto-detected .md/.markdown) → lines spliced in and
+      #          walked by the parent preprocessor in the same pass.
+      def _emit_include(rel_path, type_override = nil)
+        abs_path = File.expand_path(rel_path, @base_path)
+        content  = File.read(abs_path)
+
+        ext  = File.extname(abs_path).downcase
+        type = type_override || (INCLUDE_MD_EXTS.include?(ext) ? 'markdown' : ext == '.html' ? 'html' : 'text')
+
+        case type
+        when 'html'
+          @out << _placeholder(content.strip)
+        when 'text'
+          @out << "```"
+          @out.concat(content.lines(chomp: true))
+          @out << "```"
+        else
+          # markdown: splice lines into @lines at the current cursor and let
+          # the parent walk consume them with proper base_path for that file.
+          # We use a fresh Preprocessor on just the included content so that
+          # the included file's @( include ) directives resolve relative to it,
+          # then merge the resulting output lines back.
+          included_base = File.dirname(abs_path)
+          child = Preprocessor.new(content, @opts, base_path: included_base)
+          # Share accumulated index state so entries register in the parent.
+          child.instance_variable_set(:@index_entries, @index_entries)
+          child.instance_variable_set(:@index_counter, @index_counter)
+          child.instance_variable_set(:@toc_emitted,   @toc_emitted)
+          child.instance_variable_set(:@index_emitted, @index_emitted)
+          child.run
+          # Pull back any mutations to shared state.
+          @index_counter = child.instance_variable_get(:@index_counter)
+          @toc_emitted   = child.instance_variable_get(:@toc_emitted)
+          @index_emitted = child.instance_variable_get(:@index_emitted)
+          child_out = child.instance_variable_get(:@out)
+          @out.concat(child_out)
+        end
+      rescue Errno::ENOENT
+        raise StandardError, "documark: include file not found: #{abs_path}"
       end
 
       # Expand @(toc) into:
@@ -235,6 +314,96 @@ module Documark
         @out << _placeholder("</nav>")
 
         @toc_emitted = true
+      end
+
+      # Build a slug from an index term: lowercase, runs of non-alphanumeric
+      # collapsed to single hyphens, trim leading/trailing hyphens.
+      def _index_slug(term)
+        term.downcase.gsub(/[^a-z0-9]+/, '-').gsub(/\A-+|-+\z/, '')
+      end
+
+      # Register an index entry and return the anchor placeholder HTML.
+      # The anchor wraps `wrapped_text` if non-nil; otherwise the anchor
+      # is empty. ID format: ix-<slug>-<global-counter>. Counter increments
+      # on every entry so duplicate terms get unique IDs.
+      def _emit_index_entry(term, wrapped_text = nil)
+        @index_counter += 1
+        slug = _index_slug(term)
+        # When the term has no alphanumeric characters at all (e.g. "!!!"),
+        # the slug is empty. Drop the slug segment from the ID so we don't
+        # produce "ix--N" (the doubled hyphen would be rejected by the
+        # placeholder validator since '--' is illegal inside HTML comments).
+        id = slug.empty? ? "ix-#{@index_counter}" : "ix-#{slug}-#{@index_counter}"
+        @index_entries << { term: term, id: id }
+        _placeholder(%(<a id="#{id}">#{wrapped_text}</a>))
+      end
+
+      # Expand @(index) into a sorted list of registered index entries.
+      # Output structure:
+      #   <nav id="index" class="...">
+      #     <h2 class="index-title ...">{title}</h2>   (only if title set)
+      #     <dl class="...">
+      #       <dt class="...">{term}</dt>
+      #       <dd class="..."><a href="#ix-...">1</a>, <a href="#ix-...">2</a></dd>
+      #       ... (sorted alphabetically, case-insensitive, by term)
+      #     </dl>
+      #   </nav>
+      #
+      # If no entries are registered, emit nothing (silent skip).
+      # Only one @(index) per document; a second occurrence is a hard error.
+      # Class augmentation is configured via layout's index.classes.{nav,
+      # title, dl, dt, dd} keys; user-supplied classes are appended to the
+      # built-in ones.
+      def _emit_index
+        raise StandardError, "Multiple @(index) directives are not supported" if @index_emitted
+
+        @index_emitted = true
+        return if @index_entries.empty?
+
+        idx_opts = @opts.is_a?(Hash) ? (@opts['index'] || {}) : {}
+        title    = idx_opts['title']
+        classes  = idx_opts['classes'] || {}
+
+        nav_class   = _join_classes(nil,           classes['nav'])
+        title_class = _join_classes('index-title', classes['title'])
+        dl_class    = _join_classes(nil,           classes['dl'])
+        dt_class    = _join_classes(nil,           classes['dt'])
+        dd_class    = _join_classes(nil,           classes['dd'])
+
+        @out << _placeholder(%(<nav id="index"#{_class_attr(nav_class)}>))
+        @out << _placeholder(%(<h2#{_class_attr(title_class)}>#{title}</h2>)) if title && !title.to_s.strip.empty?
+        @out << _placeholder(%(<dl#{_class_attr(dl_class)}>))
+
+        # Group entries by term, then sort case-insensitively. Within a
+        # term, preserve registration order (which corresponds to document
+        # order — first occurrence first).
+        grouped = @index_entries.group_by { |e| e[:term] }
+                                .sort_by   { |term, _| term.downcase }
+
+        grouped.each_with_index do |(term, entries), _|
+          @out << _placeholder(%(<dt#{_class_attr(dt_class)}>#{term}</dt>))
+          links = entries.each_with_index.map do |entry, occ|
+            %(<a href="##{entry[:id]}">#{occ + 1}</a>)
+          end.join(", ")
+          @out << _placeholder(%(<dd#{_class_attr(dd_class)}>#{links}</dd>))
+        end
+
+        @out << _placeholder("</dl>")
+        @out << _placeholder("</nav>")
+      end
+
+      # Join a built-in class name with a user-supplied class string.
+      # Either may be nil/empty; result is nil if both are blank.
+      def _join_classes(default, user)
+        parts = []
+        parts << default if default && !default.empty?
+        parts << user.to_s.strip unless user.nil? || user.to_s.strip.empty?
+        parts.empty? ? nil : parts.join(" ")
+      end
+
+      # Render a class="..." attribute when class is non-nil; otherwise "".
+      def _class_attr(class_value)
+        class_value ? %( class="#{class_value}") : ""
       end
 
       # Process inline tag forms inside a single line:
@@ -287,6 +456,24 @@ module Documark
             close_html_for: ->(m) { "</#{m[1]}>" },
             content_for:    ->(m) { m[3] }
           )
+        end
+
+        if result.include?('@#') || result.include?('@(#')
+          # Full form @(# term) — empty anchor at this point with the term
+          # registered. Never wraps. Run before the shorthand so the @#
+          # inside @(# ... ) isn't consumed by the shorthand regex below.
+          result = result.gsub(INDEX_FULL_RE) do
+            term = Regexp.last_match(1).strip
+            _emit_index_entry(term)
+          end
+
+          # Shorthand @# word — wraps the word; word IS the term. Word
+          # is letters-only by INDEX_SHORTHAND_RE, so trailing punctuation
+          # stays in the surrounding prose unwrapped.
+          result = result.gsub(INDEX_SHORTHAND_RE) do
+            word = Regexp.last_match(1)
+            _emit_index_entry(word, word)
+          end
         end
 
         # Restore escaped @-sigils (backslash consumed, bare @ remains).
