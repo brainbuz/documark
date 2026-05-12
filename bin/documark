@@ -85,11 +85,13 @@ def process_action(config, valid_targets)
 end
 
 valid_actions = %w[process config_new template_new]
+valid_targets = %w[html pdf markdown text epub]
 action_index = ARGV.index { |token| valid_actions.include?(token) }
 
 if action_index.nil?
   unless ARGV.include?('-h') || ARGV.include?('--help')
-    warn "Missing action. Usage: documark <action> @switches. Supported actions: #{valid_actions.join(', ')}"
+    warn "Missing action. Supported actions: #{valid_actions.join(', ')}"
+    warn "Run 'documark --help' for usage."
     exit 1
   end
   action = 'process'
@@ -102,13 +104,31 @@ end
 
 begin
   opts = Slop.parse(cli_argv) do |o|
-    o.string  '-i', '--input',   'Input file'
-    o.string  '-o', '--output',  'Output file'
-    o.string  '-t', '--target',  'Target format ie html pdf'
+    o.banner = <<~BANNER
+      Documark — document processor
+
+      Usage:
+        documark <action> [options]
+
+      Actions:
+        process       Convert a document to an output format
+        config_new    Generate a new config file in the current directory
+        template_new  Generate a new document template
+
+      Example:
+        documark process -i mydoc.dm -o output.html -t html
+
+      Supported targets: #{valid_targets.join(', ')}
+
+      Options:
+    BANNER
+    o.string  '-i', '--input',   'Input .dm file'
+    o.string  '-o', '--output',  'Output file path'
+    o.string  '-t', '--target',  "Output format (#{valid_targets.join(', ')})"
     o.string  '-b', '--browser', 'Browser path for headless PDF rendering'
     o.bool    '-v', '--verbose', 'Verbose output'
-    o.string  '-c', '--config',  'Specify a config file'
-    o.bool    '-d', '--debug',   'Show full stack traces'
+    o.string  '-c', '--config',  'Config file path'
+    o.bool    '-d', '--debug',   'Show full stack traces on errors'
     o.on      '-h', '--help',    'Show this message' do
       puts o
       exit
@@ -127,8 +147,6 @@ Documark::Runtime.debug = options['debug']
 file_config = read_config(options['config'])
 config = merge_config(file_config, options)
 
-valid_targets = %w[html pdf markdown text epub]
-
 case action
 when 'config_new'
   Documark::Config.config_new
@@ -138,5 +156,6 @@ when 'process'
   process_action(config, valid_targets)
 else
   warn "Unsupported action '#{action}'. Supported actions: #{valid_actions.join(', ')}"
+  warn "Run 'documark --help' for usage."
   exit 1
 end

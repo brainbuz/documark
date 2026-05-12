@@ -2,6 +2,7 @@
 
 module Documark
   module TagProcessor
+    # ── Block/semantic/directive tag patterns ──────────────────────────────────
     # Matches a @{ ... } line that is the entire (stripped) line
     BLOCK_TAG_RE      = /\A@\{([^}]*)\}\z/
     # Matches a @[element attrs] line that is the entire (stripped) line
@@ -14,6 +15,8 @@ module Documark
     # m[1]=path, m[2]=type (markdown|html|text) or nil.
     INCLUDE_RE        = /\A@\(\s*include\s+['"]([^'"]+)['"]\s*(markdown|html|text)?\s*\)\z/
     INCLUDE_MD_EXTS   = %w[.md .markdown].freeze
+
+    # ── Index patterns ─────────────────────────────────────────────────────────
     # Matches the full @(# term) index directive. m[1]=term phrase.
     # Always emits an empty anchor; never wraps. Run BEFORE
     # INDEX_SHORTHAND_RE so the @# opener of a full form isn't consumed
@@ -26,6 +29,8 @@ module Documark
     # word. Authors who need digits, punctuation, or symbols inside an
     # index term must use the full form @(# term).
     INDEX_SHORTHAND_RE = /@#\s*(\p{L}+)/
+
+    # ── Placeholder, escaping, defaults ────────────────────────────────────────
     # Finds self-describing placeholders in post-processed HTML.
     # The HTML to be restored is encoded directly inside the comment between
     # the :DMTAG markers, eliminating the need for a side-table registry.
@@ -34,6 +39,8 @@ module Documark
     ESCAPE_SENTINEL   = "\x00DMAT\x00"
 
     DEFAULT_TOC_DEPTH = 3
+
+    # ── Public API ─────────────────────────────────────────────────────────────
 
     module_function
 
@@ -67,7 +74,8 @@ module Documark
     # cannot be safely encoded. Currently the only rejection rule is the
     # presence of '--' (forbidden inside HTML comments). A nil return is
     # the caller's signal to fall back to passing the original source
-    # line through as literal text.
+    # line through as literal text. We warn but do not raise: a single
+    # malformed attribute should not abort an entire document.
     def make_placeholder(html)
       if html.include?('--')
         warn "documark: ignoring tag with invalid '--' in attribute value: #{html.inspect}"
@@ -103,125 +111,13 @@ module Documark
       parts.join
     end
 
-    # Internal: walks the body line-by-line, replacing @{} and @[] directives
-    # with self-describing HTML comment placeholders.
-    #
-    # Method-naming convention: methods prefixed with _ are internal helpers
-    # not intended for external use. They aren't marked private because
-    # nothing about calling them from outside would corrupt state, and the
-    # _ prefix is sufficient signal to readers.
-    class Preprocessor
-      def initialize(body, opts = {}, base_path: nil)
-        @lines          = body.lines(chomp: true)
-        @out            = []
-        @opts           = opts
-        @toc_emitted    = false
-        @index_emitted  = false
-        @index_entries  = []
-        @index_counter  = 0
-        # Base directory for resolving relative @( include ) paths.
-        # Falls back to opts["input_path"] if not given directly (used by
-        # recursive calls to carry the including file's directory).
-        input_path  = opts["input_path"]
-        @base_path  = base_path || (input_path ? File.dirname(File.expand_path(input_path)) : Dir.pwd)
-      end
-
-      # Single walk through the document. Block-level constructs (@(), @{},
-      # @[]) are detected here; their content lines are passed through the
-      # inline processor _inline so @<> and inline @{} spans get handled.
-      def run
-        i = 0
-        while i < @lines.length
-          line = @lines[i].strip
-
-          if line.start_with?('\\@')
-            # Escaped @-sigil: strip the backslash, pass through as literal text.
-            @out << @lines[i].sub('\\@', '@')
-            i += 1
-          elsif (m = line.match(INCLUDE_RE))
-            _emit_include(m[1], m[2])
-            i += 1
-          elsif (m = line.match(DIRECTIVE_RE))
-            _emit_directive(m[1])
-            i += 1
-          elsif (m = line.match(BLOCK_TAG_RE))
-            attrs = TagProcessor.build_attrs(m[1])
-            i = _scan_block(
-              start_index:    i,
-              open_html:      "<div#{attrs}>",
-              close_html:     "</div>",
-              close_detector: ->(stripped) { (cm = stripped.match(BLOCK_TAG_RE)) && cm[1].strip.empty? }
-            )
-          elsif (m = line.match(SEMANTIC_TAG_RE))
-            element = m[1]
-            attrs   = TagProcessor.build_attrs(m[2])
-            i = _scan_block(
-              start_index:    i,
-              open_html:      "<#{element}#{attrs}>",
-              close_html:     "</#{element}>",
-              close_detector: ->(stripped) { (cm = stripped.match(SEMANTIC_CLOSE_RE)) && cm[1] == element }
-            )
-          else
-            @out << _inline(@lines[i])
-            i += 1
-          end
-        end
-
-        @out.join("\n")
-      end
-
-      # Scan a block-level construct starting at @lines[start_index] (which
-      # is the opener line). Decides section-mode vs single-block by whether
-      # the line right after the opener is blank. Emits open and close
-      # placeholders around the content lines, calling _inline on each
-      # content line so inline forms inside the block still get processed.
-      # Returns the new index (one past the matched close, or end-of-input).
-      def _scan_block(start_index:, open_html:, close_html:, close_detector:)
-        open_ph  = _placeholder(open_html)
-        close_ph = _placeholder(close_html)
-
-        section_mode = @lines[start_index + 1].nil? || @lines[start_index + 1].strip.empty?
-        i = start_index + 1
-
-        @out << open_ph
-        @out << ""
-
-        if section_mode
-          # Skip blank lines between opener and content.
-          i += 1 while i < @lines.length && @lines[i].strip.empty?
-          while i < @lines.length
-            if close_detector.call(@lines[i].strip)
-              @out << close_ph
-              return i + 1
-            end
-            @out << _inline(@lines[i])
-            i += 1
-          end
-          # End of input without finding the close: emit close anyway and
-          # return. (Matches existing behavior — unterminated blocks still
-          # produce a closing placeholder.)
-          @out << close_ph
-          i
-        else
-          # Single-block mode: consume up to the next blank line.
-          while i < @lines.length && !@lines[i].strip.empty?
-            @out << _inline(@lines[i])
-            i += 1
-          end
-          @out << ""
-          @out << close_ph
-          i
-        end
-      end
-
-      # Build a placeholder, returning "" instead of nil so callers can
-      # append the result unconditionally. An invalid fragment (warned and
-      # dropped by make_placeholder) makes the surrounding tag silently
-      # disappear while the content it would have wrapped still renders.
-      def _placeholder(html)
-        TagProcessor.make_placeholder(html) || ""
-      end
-
+    # ── DirectiveMixin ─────────────────────────────────────────────────────────
+    # Handles all @() directive forms: @(toc), @(index), @( include ),
+    # and inline @(# term) / @# index registration. Mixed into Preprocessor
+    # so all methods have transparent access to Preprocessor instance variables
+    # (@out, @opts, @base_path, @toc_emitted, @index_emitted, @index_entries,
+    # @index_counter) via self.
+    module DirectiveMixin
       # Dispatch a @(name) directive to its expansion handler.
       def _emit_directive(name)
         case name
@@ -259,25 +155,21 @@ module Documark
           @out.concat(content.lines(chomp: true))
           @out << "```"
         else
-          # markdown: splice lines into @lines at the current cursor and let
-          # the parent walk consume them with proper base_path for that file.
-          # We use a fresh Preprocessor on just the included content so that
-          # the included file's @( include ) directives resolve relative to it,
-          # then merge the resulting output lines back.
+          # markdown: run a child Preprocessor scoped to the included file's
+          # directory so its own @( include ) directives resolve correctly.
+          # Share accumulated index state so entries register in the parent.
           included_base = File.dirname(abs_path)
           child = Preprocessor.new(content, @opts, base_path: included_base)
-          # Share accumulated index state so entries register in the parent.
           child.instance_variable_set(:@index_entries, @index_entries)
           child.instance_variable_set(:@index_counter, @index_counter)
           child.instance_variable_set(:@toc_emitted,   @toc_emitted)
           child.instance_variable_set(:@index_emitted, @index_emitted)
           child.run
-          # Pull back any mutations to shared state.
+          # Pull back scalar mutations; arrays are shared by reference already.
           @index_counter = child.instance_variable_get(:@index_counter)
           @toc_emitted   = child.instance_variable_get(:@toc_emitted)
           @index_emitted = child.instance_variable_get(:@index_emitted)
-          child_out = child.instance_variable_get(:@out)
-          @out.concat(child_out)
+          @out.concat(child.instance_variable_get(:@out))
         end
       rescue Errno::ENOENT
         raise StandardError, "documark: include file not found: #{abs_path}"
@@ -314,28 +206,6 @@ module Documark
         @out << _placeholder("</nav>")
 
         @toc_emitted = true
-      end
-
-      # Build a slug from an index term: lowercase, runs of non-alphanumeric
-      # collapsed to single hyphens, trim leading/trailing hyphens.
-      def _index_slug(term)
-        term.downcase.gsub(/[^a-z0-9]+/, '-').gsub(/\A-+|-+\z/, '')
-      end
-
-      # Register an index entry and return the anchor placeholder HTML.
-      # The anchor wraps `wrapped_text` if non-nil; otherwise the anchor
-      # is empty. ID format: ix-<slug>-<global-counter>. Counter increments
-      # on every entry so duplicate terms get unique IDs.
-      def _emit_index_entry(term, wrapped_text = nil)
-        @index_counter += 1
-        slug = _index_slug(term)
-        # When the term has no alphanumeric characters at all (e.g. "!!!"),
-        # the slug is empty. Drop the slug segment from the ID so we don't
-        # produce "ix--N" (the doubled hyphen would be rejected by the
-        # placeholder validator since '--' is illegal inside HTML comments).
-        id = slug.empty? ? "ix-#{@index_counter}" : "ix-#{slug}-#{@index_counter}"
-        @index_entries << { term: term, id: id }
-        _placeholder(%(<a id="#{id}">#{wrapped_text}</a>))
       end
 
       # Expand @(index) into a sorted list of registered index entries.
@@ -392,6 +262,28 @@ module Documark
         @out << _placeholder("</nav>")
       end
 
+      # Register an index entry and return the anchor placeholder HTML.
+      # The anchor wraps `wrapped_text` if non-nil; otherwise the anchor
+      # is empty. ID format: ix-<slug>-<global-counter>. Counter increments
+      # on every entry so duplicate terms get unique IDs.
+      def _emit_index_entry(term, wrapped_text = nil)
+        @index_counter += 1
+        slug = _index_slug(term)
+        # When the term has no alphanumeric characters at all (e.g. "!!!"),
+        # the slug is empty. Drop the slug segment from the ID so we don't
+        # produce "ix--N" (the doubled hyphen would be rejected by the
+        # placeholder validator since '--' is illegal inside HTML comments).
+        id = slug.empty? ? "ix-#{@index_counter}" : "ix-#{slug}-#{@index_counter}"
+        @index_entries << { term: term, id: id }
+        _placeholder(%(<a id="#{id}">#{wrapped_text}</a>))
+      end
+
+      # Build a slug from an index term: lowercase, runs of non-alphanumeric
+      # collapsed to single hyphens, trim leading/trailing hyphens.
+      def _index_slug(term)
+        term.downcase.gsub(/[^a-z0-9]+/, '-').gsub(/\A-+|-+\z/, '')
+      end
+
       # Join a built-in class name with a user-supplied class string.
       # Either may be nil/empty; result is nil if both are blank.
       def _join_classes(default, user)
@@ -404,6 +296,85 @@ module Documark
       # Render a class="..." attribute when class is non-nil; otherwise "".
       def _class_attr(class_value)
         class_value ? %( class="#{class_value}") : ""
+      end
+    end
+
+    # ── Preprocessor ───────────────────────────────────────────────────────────
+    # Internal: walks the body line-by-line, replacing @{} and @[] directives
+    # with self-describing HTML comment placeholders.
+    #
+    # Method-naming convention: methods prefixed with _ are internal helpers
+    # not intended for external use. They aren't marked private because
+    # nothing about calling them from outside would corrupt state, and the
+    # _ prefix is sufficient signal to readers.
+    class Preprocessor
+      include DirectiveMixin
+
+      def initialize(body, opts = {}, base_path: nil)
+        @lines          = body.lines(chomp: true)
+        @out            = []
+        @opts           = opts
+        @toc_emitted    = false
+        @index_emitted  = false
+        @index_entries  = []
+        @index_counter  = 0
+        # Base directory for resolving relative @( include ) paths.
+        # Falls back to opts["input_path"] if not given directly (used by
+        # recursive calls to carry the including file's directory).
+        input_path = opts["input_path"]
+        @base_path = base_path || (input_path ? File.dirname(File.expand_path(input_path)) : Dir.pwd)
+      end
+
+      # Scan a block-level construct starting at @lines[start_index] (which
+      # is the opener line). Decides section-mode vs single-block by whether
+      # the line right after the opener is blank. Emits open and close
+      # placeholders around the content lines, calling _inline on each
+      # content line so inline forms inside the block still get processed.
+      # Returns the new index (one past the matched close, or end-of-input).
+      def _scan_block(start_index:, open_html:, close_html:, close_detector:)
+        open_ph  = _placeholder(open_html)
+        close_ph = _placeholder(close_html)
+
+        section_mode = @lines[start_index + 1].nil? || @lines[start_index + 1].strip.empty?
+        i = start_index + 1
+
+        @out << open_ph
+        @out << ""
+
+        if section_mode
+          # Skip blank lines between opener and content.
+          i += 1 while i < @lines.length && @lines[i].strip.empty?
+          while i < @lines.length
+            if close_detector.call(@lines[i].strip)
+              @out << close_ph
+              return i + 1
+            end
+            @out << _inline(@lines[i])
+            i += 1
+          end
+          # End of input without finding the close: emit close anyway and
+          # return. (Matches existing behavior — unterminated blocks still
+          # produce a closing placeholder.)
+          @out << close_ph
+          i
+        else
+          # Single-block mode: consume up to the next blank line.
+          while i < @lines.length && !@lines[i].strip.empty?
+            @out << _inline(@lines[i])
+            i += 1
+          end
+          @out << ""
+          @out << close_ph
+          i
+        end
+      end
+
+      # Build a placeholder, returning "" instead of nil so callers can
+      # append the result unconditionally. An invalid fragment (warned and
+      # dropped by make_placeholder) makes the surrounding tag silently
+      # disappear while the content it would have wrapped still renders.
+      def _placeholder(html)
+        TagProcessor.make_placeholder(html) || ""
       end
 
       # Process inline tag forms inside a single line:
@@ -494,6 +465,50 @@ module Documark
           close_ph  = _placeholder(close_html_for ? close_html_for.call(m) : close_html)
           "#{open_ph}#{content_for.call(m)}#{close_ph}"
         end
+      end
+
+      # Single walk through the document. Block-level constructs (@(), @{},
+      # @[]) are detected here; their content lines are passed through the
+      # inline processor _inline so @<> and inline @{} spans get handled.
+      def run
+        i = 0
+        while i < @lines.length
+          line = @lines[i].strip
+
+          if line.start_with?('\\@')
+            # Escaped @-sigil: strip the backslash, pass through as literal text.
+            @out << @lines[i].sub('\\@', '@')
+            i += 1
+          elsif (m = line.match(INCLUDE_RE))
+            _emit_include(m[1], m[2])
+            i += 1
+          elsif (m = line.match(DIRECTIVE_RE))
+            _emit_directive(m[1])
+            i += 1
+          elsif (m = line.match(BLOCK_TAG_RE))
+            attrs = TagProcessor.build_attrs(m[1])
+            i = _scan_block(
+              start_index:    i,
+              open_html:      "<div#{attrs}>",
+              close_html:     "</div>",
+              close_detector: ->(stripped) { (cm = stripped.match(BLOCK_TAG_RE)) && cm[1].strip.empty? }
+            )
+          elsif (m = line.match(SEMANTIC_TAG_RE))
+            element = m[1]
+            attrs   = TagProcessor.build_attrs(m[2])
+            i = _scan_block(
+              start_index:    i,
+              open_html:      "<#{element}#{attrs}>",
+              close_html:     "</#{element}>",
+              close_detector: ->(stripped) { (cm = stripped.match(SEMANTIC_CLOSE_RE)) && cm[1] == element }
+            )
+          else
+            @out << _inline(@lines[i])
+            i += 1
+          end
+        end
+
+        @out.join("\n")
       end
     end
   end

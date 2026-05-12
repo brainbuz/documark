@@ -28,7 +28,8 @@ class DocumarkCliTest < Minitest::Test
     _stdout, stderr, status = run_cli
 
     refute status.success?
-    assert_includes stderr, 'Missing action. Usage: documark <action> @switches.'
+    assert_includes stderr, 'Missing action. Supported actions: process, config_new, template_new'
+    assert_includes stderr, "Run 'documark --help' for usage."
   end
 
   def test_exits_with_error_when_required_process_options_are_missing
