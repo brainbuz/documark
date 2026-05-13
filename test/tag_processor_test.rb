@@ -545,7 +545,7 @@ class TagProcessorTest < Minitest::Test
     assert_includes result, '<nav id="index">'
     assert_includes result, '<dl>'
     assert_includes result, '<dt>Foo</dt>'
-    assert_includes result, '<a href="#ix-foo-1">1</a>'
+    assert_includes result, '<a href="#ix-foo-1"></a>'
     assert_includes result, '</dd>'
     assert_includes result, '</dl>'
     assert_includes result, '</nav>'
@@ -557,7 +557,7 @@ class TagProcessorTest < Minitest::Test
     # Only one <dt>Alpha</dt> despite two registrations.
     assert_equal 1, result.scan('<dt>Alpha</dt>').size
     # The single <dd> contains two anchor links, numbered 1 and 2.
-    assert_match(/<dd[^>]*><a href="#ix-alpha-1">1<\/a>, <a href="#ix-alpha-2">2<\/a><\/dd>/, result)
+    assert_match(/<dd[^>]*><a href="#ix-alpha-1"><\/a>, <a href="#ix-alpha-2"><\/a><\/dd>/, result)
   end
 
   def test_index_placement_sorts_terms_case_insensitively
@@ -681,7 +681,7 @@ class TagProcessorTest < Minitest::Test
     body = "@# Documark works. @# Documark, also works. @# Documark; again.\n\n@(index)"
     result = Documark::TagProcessor.process(body)
     assert_equal 1, result.scan('<dt>Documark</dt>').size
-    assert_match(/<dd[^>]*><a href="#ix-documark-1">1<\/a>, <a href="#ix-documark-2">2<\/a>, <a href="#ix-documark-3">3<\/a><\/dd>/, result)
+    assert_match(/<dd[^>]*><a href="#ix-documark-1"><\/a>, <a href="#ix-documark-2"><\/a>, <a href="#ix-documark-3"><\/a><\/dd>/, result)
   end
 
   def test_shorthand_stops_at_hyphen

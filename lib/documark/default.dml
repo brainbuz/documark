@@ -18,6 +18,12 @@
 
   container_class: container
 
+  toc:
+    style: css
+
+  index:
+    style: css
+
 ---
 
 @media screen {
@@ -65,6 +71,20 @@ code, pre, kbd, samp { font-family: var(--doc-font-mono); }
   html, body {
     margin: 0;
     padding: 0;
+  }
+
+  /* TOC: dot leader + page number after each entry link.
+     target-counter resolves the page of the linked anchor at render time.
+     WeasyPrint 53+ supports this; Chromium headless does not. */
+  ul#markdown-toc a::after {
+    content: leader(dotted) " " target-counter(attr(href url), page);
+  }
+
+  /* Index: page number(s) after each occurrence link in the dd.
+     The links are already comma-separated; this appends a page ref
+     after each individual link rather than after the whole dd. */
+  nav#index dd a::after {
+    content: target-counter(attr(href url), page);
   }
 }
 

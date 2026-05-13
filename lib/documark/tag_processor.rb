@@ -53,7 +53,16 @@ module Documark
     #   "input_path" => String  — absolute path to the source document; used to
     #                             resolve relative @( include ) paths.
     def preprocess(body, opts = {})
-      Preprocessor.new(body, opts || {}).run
+      pp = Preprocessor.new(body, opts || {})
+      result = pp.run
+      # Surface emission flags to the caller via the shared opts hash so
+      # downstream renderers (e.g. PDF post-processing) can react to the
+      # presence of @(toc) / @(index) without re-parsing the body.
+      if opts.is_a?(Hash)
+        opts['toc_emitted']   = pp.instance_variable_get(:@toc_emitted)
+        opts['index_emitted'] = pp.instance_variable_get(:@index_emitted)
+      end
+      result
     end
 
     # Phase 2: substitute placeholders emitted by preprocess with the HTML
@@ -252,8 +261,8 @@ module Documark
 
         grouped.each_with_index do |(term, entries), _|
           @out << _placeholder(%(<dt#{_class_attr(dt_class)}>#{term}</dt>))
-          links = entries.each_with_index.map do |entry, occ|
-            %(<a href="##{entry[:id]}">#{occ + 1}</a>)
+          links = entries.map do |entry|
+            %(<a href="##{entry[:id]}"></a>)
           end.join(", ")
           @out << _placeholder(%(<dd#{_class_attr(dd_class)}>#{links}</dd>))
         end
