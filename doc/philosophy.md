@@ -70,7 +70,7 @@ The larger goal is to explore what an open word processing standard could look l
 
 ## 6. Design Decisions
 
-CSS is a well known and widely adapted styling mechanism that has come a long way and is capable of describing very sophisticated and specific document layout. Browsers already implement the complex process of rendering. Chromium's headless cli browsing ability provides to leverage browser rendering plus all of the print styling capability that CSS has to generate documents.
+CSS is a well known and widely adapted styling mechanism that has come a long way and is capable of describing very sophisticated and specific document layout, including paged-media rules for print. Documark leans on an existing CSS-aware renderer rather than reimplementing layout: the current implementation uses [WeasyPrint](https://weasyprint.org/) for PDF, but any tool that interprets CSS paged-media could fill the same role.
 
 Kramdown is widely considered to be one of the best Markdown libraries -- Kramdown supports embedding style data in Markdown and popular Markdown extensions like tables. Ruby also has some excellent PDF handling libraries like hexapdf.
 

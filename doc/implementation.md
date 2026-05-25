@@ -13,7 +13,7 @@ The implementation is organized into a few small modules:
 - parser: reads the Documark header, extracts sections, and parses metadata
 - config: loads user config and supports config/template helper commands
 - HTML renderer: converts Markdown to HTML and injects the selected layout
-- PDF renderer: prints generated HTML to PDF through a headless browser
+- PDF renderer: invokes the [WeasyPrint](https://weasyprint.org/) command-line tool on generated HTML
 
 Main source files:
 
@@ -27,14 +27,17 @@ Main source files:
 
 For the `process` action, the prototype currently does the following:
 
-1. Merge built-in defaults, config-file settings, and CLI options.
-2. Read the input file.
-3. Require a Documark header on the first line.
-4. Split the input into the `data`, optional `layout`, and body sections.
-5. Parse the `data` section as YAML.
-6. Resolve layout from the document or the configured default layout file.
-7. Render the Markdown body to HTML.
-8. Write HTML directly, print to PDF, or emit Markdown-style body output depending on target.
+1. Discover and load plugins via `Documark::Plugins.discover!` (plugin load failure is a hard fail).
+2. Merge built-in defaults, config-file settings, and CLI options.
+3. Validate the requested `--target` as a registered feature.
+4. Read the input file.
+5. Require a Documark header on the first line.
+6. Split the input into the `data`, optional `layout`, and body sections.
+7. Parse the `data` section as YAML.
+8. Resolve layout from the document or the configured default layout file.
+9. Enforce the union of `data.requires` and `layout.requires` against the feature registry; missing features are a hard fail.
+10. Render the Markdown body to HTML.
+11. Write HTML directly, invoke WeasyPrint to render to PDF, or emit Markdown-style body output depending on target.
 
 ## Current Document Expectations
 
@@ -102,9 +105,9 @@ The prototype renders the body to HTML and writes a full HTML document.
 
 ### PDF
 
-The prototype renders HTML first, then asks a Chromium-compatible browser to print that HTML to PDF in headless mode. When rendering for PDF the container_class is omitted, because the padding from a typical container class will be added to the page-margin specified in the style section. Mozilla browsers' headless mode doesn't have the capability that Chrome based browsers do.
+The prototype renders HTML first, then invokes the [WeasyPrint](https://weasyprint.org/) command-line tool to convert that HTML to PDF. When rendering for PDF the `container_class` is omitted, because the padding from a typical container class would compound with the page margin specified in the layout's style section.
 
-The default browser path is currently `/usr/bin/google-chrome`, but this can be overridden in config or on the command line.
+WeasyPrint is a Python package, not a Ruby gem — install it via your system package manager (`apt install weasyprint`) or `pip install weasyprint`. The `weasyprint` executable must be on `PATH`; Documark probes for it up front and hard-fails with install instructions if it's missing.
 
 ### Markdown and Text
 
@@ -126,7 +129,6 @@ The implementation currently reads an optional config from one of these location
 Common config keys:
 
 - `default_layout`
-- `browser`
 - `template_folder`
 
 The `config_new` and `template_new` actions exist to help create starter files interactively.

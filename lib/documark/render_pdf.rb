@@ -10,36 +10,6 @@ module Documark
     module_function
     extend Documark::Runtime
 
-    # Documark started by rendering through Chrome Browsers
-    # This will be kept as a comment until there is no consideration of reverting.
-    # def render_pdf_with_browser(page, output_path, browser_path)
-    #   ordie do
-    #     raise StandardError, "Browser not found or not executable: #{browser_path}" unless File.executable?(browser_path)
-
-    #     Tempfile.create(['documark-', '.html']) do |tmp|
-    #       tmp.write(page)
-    #       tmp.flush
-
-    #       args = [
-    #         browser_path,
-    #         '--headless',
-    #         '--disable-gpu', # Improve headless stability in CI/VMs by avoiding flaky GPU paths.
-    #         '--no-pdf-header-footer',
-    #         '--virtual-time-budget=3000', # Give remote assets up to 3s to load before PDF snapshot.
-    #         "--print-to-pdf=#{output_path}",
-    #         "file://#{tmp.path}"
-    #       ]
-
-    #       _stdout, stderr, status = Open3.capture3(*args)
-    #       unless status.success?
-    #         raise StandardError, "PDF render failed (exit #{status.exitstatus})\n" \
-    #                              "Command: #{args.join(' ')}\n" \
-    #                              "Stderr: #{stderr.strip}"
-    #       end
-    #     end
-    #   end
-    # end
-
     # Default WeasyPrint CSS for TOC page numbers. Injected unless the layout
     # sets toc.style: css (meaning the layout stylesheet handles it itself).
     DEFAULT_TOC_PRINT_CSS = <<~CSS.freeze
@@ -110,10 +80,24 @@ module Documark
       end
     end
 
+    # Check for weasyprint availability. Raises StandardError with
+    # an install-friendly message if not found; otherwise returns silently.
+    def _require_weasyprint!
+      system('weasyprint --version', out: File::NULL, err: File::NULL)
+      return if $?.success?
+
+      raise StandardError,
+            "documark: 'weasyprint' executable not found on PATH.\n" \
+            "PDF output requires WeasyPrint. Install it via your system " \
+            "package manager or `pip install weasyprint`, then re-run."
+    end
+
     # Run WeasyPrint against the composed HTML, writing the PDF to output_path.
     # Appends any default print CSS not already handled by the layout.
     def render_pdf_with_weasy(page, output_path, layout = nil)
       ordie do
+        _require_weasyprint!
+
         Tempfile.create(['documark-', '.html']) do |tmp|
           tmp.write(page + _pdf_feature_styles(layout))
           tmp.flush

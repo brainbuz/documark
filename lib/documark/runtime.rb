@@ -4,13 +4,13 @@ module Documark
   module Runtime
     module_function
 
-  def debug=(value)
-    @debug = value
-  end
+    def debug=(value)
+      @debug = value
+    end
 
-  def debug?
-    !!@debug
-  end
+    def debug?
+      !!@debug
+    end
 
     def ordie
       yield

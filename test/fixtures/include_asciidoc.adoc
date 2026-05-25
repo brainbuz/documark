@@ -1,0 +1,13 @@
+[role=note]
+== Asciidoc Section
+
+This paragraph comes from an AsciiDoc include.
+
+* one
+* two
+* three
+
+[source,ruby]
+----
+puts "hello"
+----

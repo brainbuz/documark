@@ -9,12 +9,14 @@ module Documark
     SEMANTIC_TAG_RE   = /\A@\[([a-zA-Z][a-zA-Z0-9_-]*)([^\]]*)\]\z/
     # Matches a @[/element] closing line
     SEMANTIC_CLOSE_RE = /\A@\[\/([a-zA-Z][a-zA-Z0-9_-]*)\]\z/
-    # Matches a @(name) Documark directive line
-    DIRECTIVE_RE      = /\A@\(([a-z][a-z0-9-]*)\s*\)\z/
-    # Matches @( include 'file' ) or @( include "file" ) with optional type.
-    # m[1]=path, m[2]=type (markdown|html|text) or nil.
-    INCLUDE_RE        = /\A@\(\s*include\s+['"]([^'"]+)['"]\s*(markdown|html|text)?\s*\)\z/
-    INCLUDE_MD_EXTS   = %w[.md .markdown].freeze
+    # Unified @() directive matcher. Captures:
+    #   m[1] — directive name (first word inside parens)
+    #   m[2] — raw args string (may be empty); stripped of leading/trailing
+    #          whitespace and the trailing 'begin' token if present
+    #   m[3] — 'begin' if this is a block opener, nil otherwise
+    DIRECTIVE_RE   = /\A@\(\s*([a-z][a-z0-9-]*)(?:\s+(.*?))?\s*(begin)?\s*\)\z/
+    # Closer for a block directive: @( end )
+    BLOCK_CLOSE_RE = /\A@\(\s*end\s*\)\z/
 
     # ── Index patterns ─────────────────────────────────────────────────────────
     # Matches the full @(# term) index directive. m[1]=term phrase.
@@ -31,10 +33,10 @@ module Documark
     INDEX_SHORTHAND_RE = /@#\s*(\p{L}+)/
 
     # ── Placeholder, escaping, defaults ────────────────────────────────────────
-    # Finds self-describing placeholders in post-processed HTML.
-    # The HTML to be restored is encoded directly inside the comment between
-    # the :DMTAG markers, eliminating the need for a side-table registry.
-    PLACEHOLDER_RE    = /<!--DMTAG:(.*?):DMTAG-->/m
+    # Matches placeholder comments emitted by preprocess. The captured group
+    # is a decimal integer key into opts['_registry'], which maps IDs to the
+    # HTML strings to be restored by postprocess.
+    PLACEHOLDER_RE    = /<!--DMTAG:(\d+):DMTAG-->/
     # Sentinel used internally to protect \@ escape sequences during inline processing
     ESCAPE_SENTINEL   = "\x00DMAT\x00"
 
@@ -44,16 +46,21 @@ module Documark
 
     module_function
 
-    # Phase 1: replace @{} and @[] directives with self-describing HTML
-    # comment placeholders. Returns the transformed body string. Markdown
-    # content is left untouched so Kramdown processes it normally.
+    # Phase 1: replace @{} and @[] directives with numeric-ID placeholder
+    # comments. Returns the transformed body string. Markdown content is left
+    # untouched so Kramdown processes it normally.
     #
     # opts may contain:
     #   "toc"        => { "depth" => Integer (default 3), "title" => String|nil }
     #   "input_path" => String  — absolute path to the source document; used to
     #                             resolve relative @( include ) paths.
+    #
+    # After the call, opts['_registry'] holds the ID→HTML map consumed by
+    # postprocess, and opts['toc_emitted'] / opts['index_emitted'] are set.
     def preprocess(body, opts = {})
-      pp = Preprocessor.new(body, opts || {})
+      opts ||= {}
+      opts['_registry'] ||= {}
+      pp = Preprocessor.new(body, opts)
       result = pp.run
       # Surface emission flags to the caller via the shared opts hash so
       # downstream renderers (e.g. PDF post-processing) can react to the
@@ -65,33 +72,25 @@ module Documark
       result
     end
 
-    # Phase 2: substitute placeholders emitted by preprocess with the HTML
-    # encoded inside each placeholder's comment body.
-    def postprocess(html)
-      html.gsub(PLACEHOLDER_RE) { Regexp.last_match(1) }
+    # Phase 2: substitute numeric-ID placeholders with stored HTML. Pass the
+    # same opts hash that was given to preprocess so the registry is shared.
+    def postprocess(html, opts = {})
+      registry = (opts || {})['_registry'] || {}
+      html.gsub(PLACEHOLDER_RE) { registry[Regexp.last_match(1).to_i] || '' }
     end
 
     # Convenience method: preprocess + postprocess without Kramdown in between.
     # Used directly by unit tests; real rendering goes through render_html.rb.
     def process(body, opts = {})
-      postprocess(preprocess(body, opts || {}))
+      postprocess(preprocess(body, opts), opts)
     end
 
-    # Wrap an HTML fragment in a self-describing comment placeholder.
-    #
-    # Returns the placeholder string on success, or nil if the fragment
-    # cannot be safely encoded. Currently the only rejection rule is the
-    # presence of '--' (forbidden inside HTML comments). A nil return is
-    # the caller's signal to fall back to passing the original source
-    # line through as literal text. We warn but do not raise: a single
-    # malformed attribute should not abort an entire document.
-    def make_placeholder(html)
-      if html.include?('--')
-        warn "documark: ignoring tag with invalid '--' in attribute value: #{html.inspect}"
-        return nil
-      end
-
-      "<!--DMTAG:#{html}:DMTAG-->"
+    # Store an HTML fragment in the registry and return a placeholder comment
+    # containing only its integer ID. Always succeeds — no content restrictions.
+    def make_placeholder(html, registry)
+      id = registry.size + 1
+      registry[id] = html
+      "<!--DMTAG:#{id}:DMTAG-->"
     end
 
     # Parse @{} / @[] attribute string into an HTML attribute string.
@@ -121,69 +120,10 @@ module Documark
     end
 
     # ── DirectiveMixin ─────────────────────────────────────────────────────────
-    # Handles all @() directive forms: @(toc), @(index), @( include ),
-    # and inline @(# term) / @# index registration. Mixed into Preprocessor
-    # so all methods have transparent access to Preprocessor instance variables
-    # (@out, @opts, @base_path, @toc_emitted, @index_emitted, @index_entries,
-    # @index_counter) via self.
+    # Methods for built-in directives that need direct access to preprocessor
+    # state. Inline @(# term) / @# index registration also lives here since it
+    # runs from within _inline, not the directive dispatcher.
     module DirectiveMixin
-      # Dispatch a @(name) directive to its expansion handler.
-      def _emit_directive(name)
-        case name
-        when 'toc'
-          _emit_toc
-        when 'index'
-          _emit_index
-        else
-          raise StandardError, "Unknown Documark directive: @(#{name})"
-        end
-      end
-
-      # Expand @( include 'path' [type] ) by reading the file and splicing its
-      # preprocessed content into @out. The included file's own @() directives
-      # are processed because we recurse through a new Preprocessor whose
-      # state (toc_emitted, index_entries, etc.) is shared via the parent.
-      #
-      # type is one of 'markdown', 'html', 'text', or nil (auto-detect by ext).
-      # html  → raw content injected as a self-describing placeholder block.
-      # text  → content emitted as a fenced code block so Kramdown escapes it.
-      # markdown (or auto-detected .md/.markdown) → lines spliced in and
-      #          walked by the parent preprocessor in the same pass.
-      def _emit_include(rel_path, type_override = nil)
-        abs_path = File.expand_path(rel_path, @base_path)
-        content  = File.read(abs_path)
-
-        ext  = File.extname(abs_path).downcase
-        type = type_override || (INCLUDE_MD_EXTS.include?(ext) ? 'markdown' : ext == '.html' ? 'html' : 'text')
-
-        case type
-        when 'html'
-          @out << _placeholder(content.strip)
-        when 'text'
-          @out << "```"
-          @out.concat(content.lines(chomp: true))
-          @out << "```"
-        else
-          # markdown: run a child Preprocessor scoped to the included file's
-          # directory so its own @( include ) directives resolve correctly.
-          # Share accumulated index state so entries register in the parent.
-          included_base = File.dirname(abs_path)
-          child = Preprocessor.new(content, @opts, base_path: included_base)
-          child.instance_variable_set(:@index_entries, @index_entries)
-          child.instance_variable_set(:@index_counter, @index_counter)
-          child.instance_variable_set(:@toc_emitted,   @toc_emitted)
-          child.instance_variable_set(:@index_emitted, @index_emitted)
-          child.run
-          # Pull back scalar mutations; arrays are shared by reference already.
-          @index_counter = child.instance_variable_get(:@index_counter)
-          @toc_emitted   = child.instance_variable_get(:@toc_emitted)
-          @index_emitted = child.instance_variable_get(:@index_emitted)
-          @out.concat(child.instance_variable_get(:@out))
-        end
-      rescue Errno::ENOENT
-        raise StandardError, "documark: include file not found: #{abs_path}"
-      end
-
       # Expand @(toc) into:
       #   <nav id="toc">                       (placeholder, opaque to Kramdown)
       #     <h2 class="toc-title">{title}</h2> (placeholder, only if title set)
@@ -319,19 +259,80 @@ module Documark
     class Preprocessor
       include DirectiveMixin
 
-      def initialize(body, opts = {}, base_path: nil)
+      # Read-only handles exposed to directive handlers via the ctx argument.
+      attr_reader :data, :base_path
+
+      def initialize(body, opts = {})
         @lines          = body.lines(chomp: true)
         @out            = []
         @opts           = opts
+        @data           = opts
+        @opts['_registry'] ||= {}
         @toc_emitted    = false
         @index_emitted  = false
         @index_entries  = []
         @index_counter  = 0
-        # Base directory for resolving relative @( include ) paths.
-        # Falls back to opts["input_path"] if not given directly (used by
-        # recursive calls to carry the including file's directory).
         input_path = opts["input_path"]
-        @base_path = base_path || (input_path ? File.dirname(File.expand_path(input_path)) : Dir.pwd)
+        @base_path = input_path ? File.dirname(File.expand_path(input_path)) : Dir.pwd
+      end
+
+      # Splice raw markdown text into the line stream at position +pos+ so
+      # the run loop processes it as if it had been typed there. Handlers
+      # returning mode: :passthrough invoke this via _apply_handler_result.
+      def splice_lines(pos, text)
+        @lines.insert(pos + 1, *text.lines(chomp: true))
+      end
+
+      # Look up handler in Directives, collect content for block forms,
+      # invoke, and apply the returned {content:, mode:}. Returns the new
+      # line index for the run loop to continue from.
+      def _dispatch_directive(name, args, is_block, current_pos)
+        handler = Documark::Directives.lookup(name)
+        unless handler
+          form = is_block ? "@(#{name} ... begin)" : "@(#{name})"
+          raise StandardError,
+                "documark: unknown directive #{form} — no built-in or " \
+                "plugin-registered directive provides this. Check for a missing plugin."
+        end
+
+        kind = Documark::Directives.kind_for(name)
+        if is_block && kind == :inline
+          raise StandardError,
+                "documark: directive @(#{name}) is single-line only; @( #{name} begin ) is not supported."
+        elsif !is_block && kind == :block
+          raise StandardError,
+                "documark: directive @(#{name}) is block-only; use @( #{name} begin ) ... @( end )."
+        end
+
+        if is_block
+          raw_lines, next_pos = _scan_raw_block(current_pos, name)
+          result = handler.call(args, raw_lines.join("\n"), self)
+        else
+          result = handler.call(args, nil, self)
+          next_pos = current_pos + 1
+        end
+
+        _apply_handler_result(result, current_pos)
+        next_pos
+      end
+
+      # Apply a handler's return value. nil = handler did its own work.
+      # Otherwise expect { content:, mode: } and either wrap in a placeholder
+      # or splice the content into the line stream.
+      def _apply_handler_result(result, current_pos)
+        return if result.nil?
+        raise StandardError, "directive handler must return nil or a Hash with :content and :mode" unless result.is_a?(Hash)
+
+        content = result[:content] || result['content']
+        mode = result[:mode] || result['mode']
+        case mode
+        when :placeholder
+          @out << _placeholder(content.to_s.strip)
+        when :passthrough
+          splice_lines(current_pos, content.to_s)
+        else
+          raise StandardError, "directive handler returned unknown mode #{mode.inspect} — expected :placeholder or :passthrough"
+        end
       end
 
       # Scan a block-level construct starting at @lines[start_index] (which
@@ -378,12 +379,25 @@ module Documark
         end
       end
 
-      # Build a placeholder, returning "" instead of nil so callers can
-      # append the result unconditionally. An invalid fragment (warned and
-      # dropped by make_placeholder) makes the surrounding tag silently
-      # disappear while the content it would have wrapped still renders.
+      # Collect raw lines from after start_index until @( end ) or end-of-input.
+      # Does NOT run _inline — content is passed verbatim to block directive
+      # handlers. Returns [lines_array, next_index].
+      def _scan_raw_block(start_index, name)
+        lines = []
+        i = start_index + 1
+        while i < @lines.length
+          return [lines, i + 1] if @lines[i].strip.match?(BLOCK_CLOSE_RE)
+
+          lines << @lines[i]
+          i += 1
+        end
+        warn "documark: @(#{name} begin) was never closed — treating rest of document as block content"
+        [lines, i]
+      end
+
+      # Store html in the registry and return a placeholder comment with its ID.
       def _placeholder(html)
-        TagProcessor.make_placeholder(html) || ""
+        TagProcessor.make_placeholder(html, @opts['_registry'])
       end
 
       # Process inline tag forms inside a single line:
@@ -488,12 +502,14 @@ module Documark
             # Escaped @-sigil: strip the backslash, pass through as literal text.
             @out << @lines[i].sub('\\@', '@')
             i += 1
-          elsif (m = line.match(INCLUDE_RE))
-            _emit_include(m[1], m[2])
-            i += 1
+          elsif line.match(BLOCK_CLOSE_RE)
+            raise StandardError,
+                  "documark: unexpected @( end ) — no @( ... begin ) preceded this."
           elsif (m = line.match(DIRECTIVE_RE))
-            _emit_directive(m[1])
-            i += 1
+            name      = m[1]
+            args      = (m[2] || '').strip
+            is_block  = !m[3].nil?
+            i = _dispatch_directive(name, args, is_block, i)
           elsif (m = line.match(BLOCK_TAG_RE))
             attrs = TagProcessor.build_attrs(m[1])
             i = _scan_block(

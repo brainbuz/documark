@@ -13,7 +13,7 @@ module Documark
       directive = parse_header(first_line)
       return directive if directive && directive["context"] == "documark"
 
-      raise StandardError.new("File must begin with !! documark")
+      raise StandardError, "File must begin with !! documark"
     end
 
     def parse_header(line)
@@ -69,7 +69,7 @@ module Documark
       i = 0
       i += 1 while i < lines.length && lines[i].strip.empty?
 
-      raise StandardError.new("Layout section must start with ---") unless i < lines.length && lines[i].strip == "---"
+      raise StandardError, "Layout section must start with ---" unless i < lines.length && lines[i].strip == "---"
 
       i += 1
       front_matter_lines = []
@@ -79,11 +79,11 @@ module Documark
         i += 1
       end
 
-      raise StandardError.new("Unterminated layout front matter block") if i >= lines.length
+      raise StandardError, "Unterminated layout front matter block" if i >= lines.length
 
       i += 1
       front_matter = parse_data_section(front_matter_lines.join) || {}
-      raise StandardError.new("Layout front matter must be a mapping") unless front_matter.is_a?(Hash)
+      raise StandardError, "Layout front matter must be a mapping" unless front_matter.is_a?(Hash)
 
       front_matter["style"] = (lines[i..] || []).join
       front_matter
@@ -104,14 +104,14 @@ module Documark
         index += 1
       end
 
-      raise StandardError.new("Unterminated #{section_name} block") if index >= lines.length
+      raise StandardError, "Unterminated #{section_name} block" if index >= lines.length
       [section_lines.join, index + 1]
     end
 
     def split_documark_sections(content)
       lines = content.lines(chomp: false)
       i = 0
-      raise StandardError.new("File must not be empty") if lines.empty?
+      raise StandardError, "File must not be empty" if lines.empty?
 
       header = lines[i]
       directive = read_header(header)

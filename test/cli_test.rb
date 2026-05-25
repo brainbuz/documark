@@ -51,7 +51,7 @@ class DocumarkCliTest < Minitest::Test
       )
 
       refute status.success?
-      assert_includes stderr, "Invalid target 'invalid'. Supported targets:"
+      assert_match(/required feature\(s\) not available:.*'invalid'/, stderr)
     end
   end
 
