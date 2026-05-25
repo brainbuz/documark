@@ -16,9 +16,16 @@ module Documark
     end
 
     def render_page(options, layout, data, body)
-      prepped, registry = Documark::TagProcessor.preprocess(body)
-      html = Kramdown::Document.new(prepped).to_html
-      html = Documark::TagProcessor.postprocess(html, registry)
+      opts    = (layout || {}).merge("input_path" => options["input"])
+      prepped = ordie { Documark::TagProcessor.preprocess(body, opts) }
+      # Propagate emission flags set by the tag processor back onto the
+      # layout hash so downstream renderers can see them.
+      if layout.is_a?(Hash)
+        layout['toc_emitted']   = opts['toc_emitted']
+        layout['index_emitted'] = opts['index_emitted']
+      end
+      html    = Kramdown::Document.new(prepped).to_html
+      html    = Documark::TagProcessor.postprocess(html)
       compose_html(options, layout, data, html)
     end
 

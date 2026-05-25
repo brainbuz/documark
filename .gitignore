@@ -65,6 +65,7 @@ Gemfile.lock
 # Used by RuboCop. Remote config files pulled in from inherit_from directive.
 # .rubocop-https?--*
 .copilot-instructions.md
+CLAUDE.md
 .vscode
 notes.txt
 

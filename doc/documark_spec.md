@@ -139,6 +139,31 @@ Common layout keys:
 - `stylesheets`: array of stylesheet URLs
 - `container_class`: wrapper class for screen HTML
 - `style`: populated from trailing CSS text (not authored directly in YAML)
+- `toc`: configuration for the `@(toc)` directive (section 5.2)
+- `index`: configuration for the `@(index)` directive (section 5.2)
+
+### 5.2 TOC and Index Layout Keys
+
+The `toc` and `index` layout keys configure the corresponding `@()` directives (section 8.3). All sub-keys are optional.
+
+#### `toc`
+
+| Sub-key | Type | Default | Effect |
+|---------|------|---------|--------|
+| `depth` | integer | `3` | Maximum heading level included (`1..depth`) |
+| `title` | string | _none_ | Title rendered as `<h2 class="toc-title">` above the list |
+| `style` | string | _none_ | When set to `css`, suppresses the default print CSS so the layout stylesheet handles TOC page numbers itself |
+
+#### `index`
+
+| Sub-key | Type | Default | Effect |
+|---------|------|---------|--------|
+| `title` | string | _none_ | Title rendered as `<h2 class="index-title">` above the list |
+| `limit_entry_per_page` | boolean | `false` | When `true`, after the initial PDF render the index is rewritten to drop consecutive same-page entries within each term, and a second render is performed |
+| `classes` | mapping | _empty_ | CSS classes appended to the built-ins on each index element; recognized sub-keys are `nav`, `title`, `dl`, `dt`, `dd` |
+| `style` | string | _none_ | When set to `css`, suppresses the default print CSS so the layout stylesheet handles index page numbers itself |
+
+`limit_entry_per_page` only affects PDF output, since page numbers are only defined for print targets. It has no effect on HTML, Markdown, or text output.
 
 ## 6. Markdown Dialect and Extensions
 
@@ -152,7 +177,21 @@ For maximum forward compatibility, the body of a Documark document SHOULD use:
 - Widely adopted extensions such as GFM tables and fenced code blocks
 - Documark's own `@{}`, `@<>`, and `@[]` tag syntax for styling and semantic structure
 
-### 6.1 Style Recommendations
+### 6.1 Markdown Extension Lineage
+
+Understanding where GFM's extensions come from is useful context for what "widely adopted" means in practice.
+
+The original Markdown specification (John Gruber, 2004) defined core inline and block constructs but deliberately left many document features unspecified. Several independent projects extended it:
+
+**PHP Markdown Extra** (Michel Fortin, ~2004) introduced tables, definition lists, footnotes, fenced code blocks (using `~~~`), and inline attribute syntax. Many later Markdown processors, including Kramdown, credit PHP Markdown Extra as the source for these features.
+
+**CommonMark** (John MacFarlane et al., 2014–) is a formal specification that resolves ambiguities in the original Markdown spec. It defines precise parsing rules for the core feature set but does not standardize extensions. CommonMark is the best available reference for what portable baseline Markdown means.
+
+**GitHub Flavored Markdown (GFM)** (GitHub, 2017–) is a CommonMark superset. It standardizes tables (adapted from PHP Markdown Extra), fenced code blocks with backtick syntax, strikethrough, task lists, and autolinks. GFM is the de facto standard for the extension layer because of GitHub's ubiquity.
+
+When this document says "GFM tables and fenced code blocks," it means these features as widely understood across tools — not a strict conformance requirement against the GFM specification document.
+
+### 6.2 Style Recommendations
 
 These are recommendations, not format rules. They are intended to improve readability, portability, and consistency across Documark documents.
 
@@ -188,7 +227,7 @@ The four reserved sigil families are:
 | `@{ }` | Block attribute and inline span tags (classes, IDs, data attributes) |
 | `@[ ]` | Semantic block element directives |
 | `@< >` | Inline HTML element directives |
-| `@( )` | Reserved — purpose not yet defined |
+| `@( )` | Documark directives — table of contents, index, includes |
 
 These forms are visually distinctive in plain text and form a uniform family that is straightforward to target with editor syntax highlighting rules.
 
@@ -323,9 +362,55 @@ Rules:
 
 ---
 
-### 8.3 Namespace Reservation
+### 8.3 `@()` — Documark Directives
 
-`@()` is reserved and MUST NOT be used in documents. Its purpose is not yet defined. Implementations MAY warn on encountering this form and SHOULD pass it through as literal text.
+`@()` introduces processor-level directives. Unlike `@{}` / `@[]` / `@<>`, which produce HTML elements, `@()` requests structural document features — a table of contents, an index, or the inclusion of an external file.
+
+Each directive form occupies its own line (block form) or appears inline within prose (only `@(# term)` is inline). The directive name is lowercase ASCII; unknown directive names are a hard error.
+
+#### Defined directives
+
+| Form | Position | Effect |
+|------|----------|--------|
+| `@(toc)` | block | Emit a table of contents at this point |
+| `@(index)` | block | Emit a sorted index of registered terms at this point |
+| `@( include 'path' )` | block | Splice the contents of another file in at this point |
+| `@( include 'path' type )` | block | Same, with explicit type `markdown`, `html`, or `text` |
+| `@(# term)` | inline | Register `term` in the index with an anchor at this location |
+| `@# word` | inline | Shorthand for `@(# word)` where the term is a single letter-only word; also wraps the word in the anchor |
+
+#### `@(toc)` — Table of contents
+
+Emits a `<nav id="toc">` containing a Kramdown-generated list of headings from the document. The depth (which heading levels are included) and an optional title are controlled by the `toc` layout key (section 5.2). For print targets, page numbers are added to each TOC entry via WeasyPrint's `target-counter`.
+
+Only one `@(toc)` directive per document; a second occurrence is a hard error.
+
+#### `@(index)` — Document index
+
+Emits a `<nav id="index">` containing a `<dl>` of registered index terms (alphabetical, case-insensitive) and links to each occurrence. For print targets, page numbers are added to each link via WeasyPrint's `target-counter`. If no entries are registered, nothing is emitted.
+
+Behavior is controlled by the `index` layout key (section 5.2), including the optional title, CSS classes, and `limit_entry_per_page` (which drops consecutive same-page entries within a term during a second-pass render).
+
+Only one `@(index)` directive per document; a second occurrence is a hard error.
+
+#### `@(# term)` and `@# word` — Index registration
+
+Both forms register an index term and emit an anchor at the call site.
+
+- **Full form `@(# term)`** — The term may contain any characters except `)`. The anchor is empty (it does not wrap surrounding text).
+- **Shorthand `@# word`** — The word is one or more Unicode letters (`\p{L}+`); any non-letter character terminates the word. The anchor wraps the matched word in `<a>`. Authors who need digits, punctuation, or symbols inside a term MUST use the full form.
+
+Multiple registrations of the same term are grouped under one entry in the rendered index, in document order.
+
+#### `@( include 'path' )` — File inclusion
+
+Reads the named file relative to the including document's directory and splices its content in at this point. The optional second token forces an interpretation:
+
+- `markdown` (default for `.md` / `.markdown`) — content is processed by the parent preprocessor in the same pass, so its own `@()` directives resolve.
+- `html` (default for `.html`) — content is injected as raw HTML.
+- `text` (default for everything else) — content is emitted as a fenced code block.
+
+An included Markdown file shares index/TOC state with its parent: terms registered inside an included file appear in the parent's `@(index)`, and headings inside it appear in the parent's `@(toc)`.
 
 ### 8.4 `@<>` — Inline Element Directives
 
@@ -406,4 +491,16 @@ Rules:
 - A backslash not immediately followed by `@` is passed through unchanged and handled by the Markdown engine according to its own escape rules.
 
 It is strongly recommended that document authors escape any `@`-sigil-like text that appears in running prose or headings and is not intended as a directive — for example when describing Documark syntax within a Documark document. Processors are not required to detect or reject unescaped tag-like text that appears in non-directive positions; behaviour in such cases is not defined.
+
+## 9. Known Issues
+
+These are areas where current implementation behavior is not committed to the spec and is likely to change.
+
+### 9.1 In-Document Tags Inside Markdown Code Regions
+
+Documark's preprocessor currently scans tag syntax (`@{}`, `@[]`, `@<>`, `@()`) without regard to Markdown code spans (`` `...` ``) or fenced code blocks (```` ``` ````). Tag-like text inside code regions is processed as if it were running prose.
+
+This is undesirable: authors documenting Documark syntax inside a Documark document must escape every example with `\@`, even inside a code fence where the intent is plainly literal text.
+
+The likely future behaviour is for the preprocessor to recognise Markdown code spans and fences and skip them. Authors should for the present consider the behaviour of @tags in these regions to be undefined.
 

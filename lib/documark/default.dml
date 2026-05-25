@@ -18,11 +18,30 @@
 
   container_class: container
 
+  toc:
+    style: css
+
+  index:
+    style: css
+
 ---
 
 @media screen {
 /* The default */
 }
+
+/* Default font stack. The serif and monospace families listed here are
+   chosen to be widely available across Linux distributions, macOS, and
+   Windows, and to be picked up by both Chromium and WeasyPrint without
+   downloading webfonts. Override --doc-font-* in a document layout to
+   change the typeface. */
+:root {
+  --doc-font-serif: "Liberation Serif", "Times New Roman", "DejaVu Serif", "Noto Serif", serif;
+  --doc-font-mono:  "Liberation Mono",  "Courier New",     "DejaVu Sans Mono", "Noto Sans Mono", monospace;
+}
+
+body { font-family: var(--doc-font-serif); }
+code, pre, kbd, samp { font-family: var(--doc-font-mono); }
 
 @media print {
 
@@ -52,6 +71,20 @@
   html, body {
     margin: 0;
     padding: 0;
+  }
+
+  /* TOC: dot leader + page number after each entry link.
+     target-counter resolves the page of the linked anchor at render time.
+     WeasyPrint 53+ supports this; Chromium headless does not. */
+  ul#markdown-toc a::after {
+    content: leader(dotted) " " target-counter(attr(href url), page);
+  }
+
+  /* Index: page number(s) after each occurrence link in the dd.
+     The links are already comma-separated; this appends a page ref
+     after each individual link rather than after the whole dd. */
+  nav#index dd a::after {
+    content: target-counter(attr(href url), page);
   }
 }
 

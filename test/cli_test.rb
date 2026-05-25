@@ -28,7 +28,8 @@ class DocumarkCliTest < Minitest::Test
     _stdout, stderr, status = run_cli
 
     refute status.success?
-    assert_includes stderr, 'Missing action. Usage: documark <action> @switches.'
+    assert_includes stderr, 'Missing action. Supported actions: process, config_new, template_new'
+    assert_includes stderr, "Run 'documark --help' for usage."
   end
 
   def test_exits_with_error_when_required_process_options_are_missing
@@ -73,7 +74,7 @@ class DocumarkCliTest < Minitest::Test
     end
   end
 
-  def test_markdown_target_strips_kramdown_attribute_lists
+  def test_markdown_target_strips_documark_attribute_lists
     Dir.mktmpdir('documark-cli-test') do |tmpdir|
       input_path = File.join(tmpdir, 'with-attrs.dm')
       output_path = File.join(tmpdir, 'out.md')
@@ -84,10 +85,10 @@ class DocumarkCliTest < Minitest::Test
         title: "Attr Test"
         !! end
 
+        @{ .big }
         # Heading
-        {: .big}
 
-        Paragraph with an inline attribute{: .highlighted}
+        Paragraph with an inline attribute@{ .highlighted }
       DOC
 
       _stdout, stderr, status = run_cli(
@@ -99,8 +100,8 @@ class DocumarkCliTest < Minitest::Test
 
       assert status.success?, stderr
       output = File.read(output_path)
-      refute_includes output, '{: .big}'
-      refute_includes output, '{: .highlighted}'
+      refute_includes output, '{: big}'
+      refute_includes output, '{: highlighted}'
       assert_includes output, '# Heading'
       assert_includes output, 'Paragraph with an inline attribute'
     end
