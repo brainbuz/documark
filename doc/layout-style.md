@@ -79,7 +79,7 @@ media tags and responsibilities:
 
 ### PDF Rendering And The Style Section
 
-The current prototype renders PDF by printing generated HTML through a Chromium-compatible browser. If the pipeline changes, CSS will still be used as a common styling language.
+The current prototype renders PDF by running the generated HTML through the [WeasyPrint](https://weasyprint.org/) command-line tool, which interprets CSS (including `@page` paged-media rules) and writes a PDF. If the pipeline changes, CSS will still be used as a common styling language.
 
 The current implementation also omits `container_class` for PDF output. That is a practical decision: container classes exist to add padding for browsing presentation that would stack on top of the margins defined in `@page`.
 

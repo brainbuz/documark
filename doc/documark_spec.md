@@ -95,6 +95,7 @@ Common keys:
 
 - `title`: document title for HTML output
 - `language` or `lang`: document language for HTML `lang` attribute
+- `requires`: array of feature names this document depends on (section 9). The processor MUST verify every listed feature is loaded before tag processing begins; missing features cause a hard error.
 
 ## 5. Layout File (`type=layout`)
 
@@ -141,6 +142,7 @@ Common layout keys:
 - `style`: populated from trailing CSS text (not authored directly in YAML)
 - `toc`: configuration for the `@(toc)` directive (section 5.2)
 - `index`: configuration for the `@(index)` directive (section 5.2)
+- `requires`: array of feature names the layout depends on (section 9). Unioned with the document's `requires` list and validated together.
 
 ### 5.2 TOC and Index Layout Keys
 
@@ -364,20 +366,71 @@ Rules:
 
 ### 8.3 `@()` — Documark Directives
 
-`@()` introduces processor-level directives. Unlike `@{}` / `@[]` / `@<>`, which produce HTML elements, `@()` requests structural document features — a table of contents, an index, or the inclusion of an external file.
+`@()` introduces processor-level directives. Unlike `@{}` / `@[]` / `@<>`, which produce HTML elements, `@()` requests structural document features.
 
-Each directive form occupies its own line (block form) or appears inline within prose (only `@(# term)` is inline). The directive name is lowercase ASCII; unknown directive names are a hard error.
+#### Grammar
+
+Every `@()` directive has one of two forms:
+
+```
+@( <name> [args...] )                       single-line
+@( <name> [args...] begin ) ... @( end )    block
+```
+
+- `<name>` is a lowercase identifier matching `[a-z][a-z0-9-]*` — the first word inside the parens.
+- `[args...]` is an opaque argument string between the name and `)` or `begin )`. Quoting is not required by the parser; directive handlers parse args themselves.
+- For the block form, all content between the opener and the matching `@( end )` is collected verbatim — no inline processing — and passed to the handler as the **content** argument.
+- `@( end )` is always literal `end`, never named; it closes the most recent block opener.
+
+Unknown directive names are a hard error. Calling a block-only directive in single-line form (or vice versa) is also a hard error.
 
 #### Defined directives
 
-| Form | Position | Effect |
-|------|----------|--------|
-| `@(toc)` | block | Emit a table of contents at this point |
-| `@(index)` | block | Emit a sorted index of registered terms at this point |
-| `@( include 'path' )` | block | Splice the contents of another file in at this point |
-| `@( include 'path' type )` | block | Same, with explicit type `markdown`, `html`, or `text` |
-| `@(# term)` | inline | Register `term` in the index with an anchor at this location |
-| `@# word` | inline | Shorthand for `@(# word)` where the term is a single letter-only word; also wraps the word in the anchor |
+| Form | Effect |
+|------|--------|
+| `@(toc)` | Emit a table of contents at this point |
+| `@(index)` | Emit a sorted index of registered terms at this point |
+| `@( include path )` | Splice the contents of another file in at this point. Path may be bare (no whitespace, no quotes, no `)`), single-quoted, or double-quoted. |
+| `@( include path type )` | Same, with explicit type. Built-in types are `markdown`, `html`, `text`; plugins may extend `include` with additional types (section 9). |
+| `@(# term)` | Inline only. Register `term` in the index with an anchor at this location |
+| `@# word` | Inline only. Shorthand for `@(# word)` where the term is a single letter-only word; also wraps the word in the anchor |
+| `@( name begin )` ... `@( end )` | Block directive — plugin- or core-handled raw content block |
+
+A line that starts with `@( include` but doesn't match the directive grammar (e.g. unquoted path with whitespace, mismatched quotes) is a hard error rather than silently passing through as literal text.
+
+#### Block directives: `@( name args begin )` / `@( end )`
+
+Block directives open and close raw content blocks. Unlike `@( include )`, the content is written inline in the document body rather than in a separate file. The preprocessor collects every line between the opener and the closer verbatim — without running Documark's inline tag processor — and passes the collected text as a single string to the handler.
+
+Rules:
+
+- The closer is always `@( end )`, regardless of the directive name.
+- An opener with no registered handler is a hard error.
+- A `@( end )` with no preceding opener is a hard error.
+- An unterminated opener (no closer before end of file) emits a warning and the remaining document body is treated as block content.
+- Content between the markers is raw and not subject to Documark tag processing.
+
+**Currently registered block directives: `asciidoc`, `talltable`**
+
+Provided by the `asciidoc` plugin (section 9.7). Renders the block content as AsciiDoc via Asciidoctor, then strips Asciidoctor structural CSS classes (preserving `language-*` on code elements). The primary use case is tables with multi-line cells, colspan/rowspan, or complex headers — things GFM pipe-table syntax cannot express.
+
+```text
+@(asciidoc begin)
+|===
+| Column A | Column B | Column C
+
+| Cell with *bold* text
+and a second line
+
+| Simple cell
+| Another
+
+| Row 2A | Row 2B | Row 2C
+|===
+@( end )
+```
+
+A document using this directive SHOULD declare `requires: [asciidoc]` in its data block.
 
 #### `@(toc)` — Table of contents
 
@@ -402,13 +455,25 @@ Both forms register an index term and emit an anchor at the call site.
 
 Multiple registrations of the same term are grouped under one entry in the rendered index, in document order.
 
-#### `@( include 'path' )` — File inclusion
+#### `@( include path [type] )` — File inclusion
 
-Reads the named file relative to the including document's directory and splices its content in at this point. The optional second token forces an interpretation:
+Reads the named file and splices its content in at this point, as if it had been typed there. All paths resolve relative to the root document's directory. There is no path scoping per included file — nested includes that need a different base must use absolute paths. The path may be:
 
-- `markdown` (default for `.md` / `.markdown`) — content is processed by the parent preprocessor in the same pass, so its own `@()` directives resolve.
-- `html` (default for `.html`) — content is injected as raw HTML.
-- `text` (default for everything else) — content is emitted as a fenced code block.
+- **bare** — any run of characters containing no whitespace, no quotes, and no `)`. Convenient for simple filenames.
+- **single-quoted** — `'path with spaces or special chars'`.
+- **double-quoted** — `"path"`.
+
+The optional second token forces a type interpretation:
+
+- `markdown` (auto-detected for `.md` / `.markdown`) — content is spliced into the document at the include point and processed in the same pass, exactly as if it had been typed there. `@()` directives in the included content resolve normally.
+- `html` (auto-detected for `.html`) — content is injected as raw HTML.
+- `text` (auto-detected for any extension not claimed by a built-in or plugin) — content is emitted as a fenced code block.
+- Plugin-registered types (e.g. `asciidoc`) — the plugin's converter renders the file to HTML, which is injected as raw HTML.
+
+Hard-fail rules:
+
+- An explicit type token that names a type no built-in handles and no loaded plugin provides is a hard error naming the missing feature.
+- A bare include with an extension that doesn't match a known type falls back to `text` (so plain text files included without an explicit type still work).
 
 An included Markdown file shares index/TOC state with its parent: terms registered inside an included file appear in the parent's `@(index)`, and headings inside it appear in the parent's `@(toc)`.
 
@@ -492,11 +557,106 @@ Rules:
 
 It is strongly recommended that document authors escape any `@`-sigil-like text that appears in running prose or headings and is not intended as a directive — for example when describing Documark syntax within a Documark document. Processors are not required to detect or reject unescaped tag-like text that appears in non-directive positions; behaviour in such cases is not defined.
 
-## 9. Known Issues
+## 9. Features and Plugins
+
+Documark functionality is organized into named **features**. A feature is the unit of dependency declaration in a document or layout: `requires: [feature_name]` in either YAML block states that the document cannot be processed without the named feature loaded.
+
+Built-in features ship with every conforming implementation. Additional features may be provided by **plugins** — independent Ruby files (typically distributed as separate gems) that register themselves into the running implementation at startup.
+
+### 9.1 Feature Naming
+
+Feature names match `[a-z][a-z0-9-]*`: lowercase ASCII, hyphens allowed, must begin with a letter. The same naming rule applies to include type tokens, directive names, and target names; in practice a feature usually shares a name with its primary capability.
+
+### 9.2 Built-in Features
+
+Conforming implementations MUST register the following features at startup:
+
+| Feature | Provides |
+|---------|----------|
+| `markdown` | Markdown include type, `markdown` output target |
+| `html` | HTML include type, `html` output target |
+| `text` | Plain text include type, `text` output target |
+| `pdf` | `pdf` output target |
+| `epub` | `epub` output target (may be a stub) |
+| `toc` | The `@(toc)` directive |
+| `index` | The `@(index)` directive |
+| `include` | The `@( include )` directive |
+
+Authors MAY name any of these in `requires:` but typically omit them by convention, since they are present in every conforming implementation. An alternative implementation targeting constrained environments MAY load handlers lazily based on the declared `requires:` list, in which case exhaustive declaration becomes useful.
+
+### 9.3 The `requires:` Key
+
+`requires:` is an optional YAML key in the document `data` block (section 4.1) and/or the layout's YAML front matter (section 5.1). Its value is an array of feature names.
+
+Rules:
+
+- The processor MUST union the `requires:` arrays from the document and the layout and verify every feature name is registered before tag processing begins.
+- A missing feature is a hard error. The error message MUST name every missing feature and identify the source file declaring the requirement.
+- Empty/missing `requires:` is a no-op.
+
+Example:
+
+```yaml
+title: "Quarterly Report"
+language: en
+requires:
+  - asciidoc
+  - pdf
+```
+
+A document that uses `@( include 'foo.adoc' )` SHOULD declare `requires: [asciidoc]` so that environments without the AsciiDoc plugin fail fast with a clear message rather than at the point of include.
+
+### 9.4 Capability Kinds
+
+Plugins extend Documark by registering capabilities. Each capability links back to a named feature so that loading the feature is sufficient to activate the capability. See `doc/plugin_authoring.md` for the practical authoring API.
+
+- **Directive** — handles a new `@(name args)` or `@(name args begin)...@(end)` form. The handler receives the args string, the block content (or nil), and a context object exposing preprocessor state. It returns `{ html:, mode: }` where mode is `:placeholder` (wrap in placeholder, invisible to Kramdown) or `:passthrough` (splice into the markdown stream).
+- **Include-type contribution** — extends the built-in `@( include )` directive with a converter for a new file type, optionally claiming file extensions for auto-detection. The converter receives the file content and returns the same `{ html:, mode: }` shape as a directive handler.
+- **Output target** — handles a new `-t <name>` argument. Built-in targets register here too so that target validation is uniform.
+
+Capabilities not registered (and not built-in) result in a hard error at the point of use.
+
+### 9.5 Discovery and Loading
+
+A plugin is a Ruby file located at `lib/documark/plugin/<name>.rb` in any directory on the load path — whether shipped in this repository, in a separately installed gem, or in a directory placed on the load path manually.
+
+Conforming implementations of the Ruby reference processor SHOULD use `Gem.find_files('documark/plugin/*.rb')` (or equivalent) to discover plugins at startup. An alternative implementation MAY use a different discovery mechanism (a manifest file, a `--plugin` flag, lazy loading driven by `requires:`) as long as the externally observable behavior is consistent: presence of a plugin makes its features available; absence with a `requires:` reference fails up-front.
+
+### 9.6 Plugin Load Failure Policy
+
+If a plugin file is present and discovery attempts to load it, the load MUST complete successfully or the entire Documark invocation MUST fail with a clear error that names the plugin and the underlying cause (missing dependency, syntax error, etc.).
+
+There is no soft-fail or "skip and warn" path. The contract is: a plugin loads with all of its abilities, or it does not load and the user is told why. A user who does not want a plugin's third-party dependencies should not install the plugin file.
+
+This applies to:
+
+- Missing Ruby gems the plugin depends on.
+- Syntax or load-time errors in the plugin file.
+
+Discovery finding zero plugin files (no plugin gems installed) is normal and not an error.
+
+### 9.7 Reference Implementation: AsciiDoc Plugin
+
+This repository ships a reference plugin at `lib/documark/plugin/asciidoc.rb`. When loaded, it registers two features:
+
+**Feature `asciidoc`:**
+
+- Contributes an include type `asciidoc` claiming the `.adoc` and `.asciidoc` extensions, enabling `@( include 'file.adoc' )` and `@( include 'file.txt' asciidoc )`.
+- Registers the `asciidoc` block directive, enabling `@( asciidoc begin )` ... `@( end )` in document bodies.
+- Both capabilities convert AsciiDoc source to HTML via the `asciidoctor` gem, stripping CSS classes added by AsciiDoctor while preserving `language-*` classes on `<code>` and `<pre>` elements (so syntax highlighting hooks still work).
+
+**Feature `talltable`:**
+
+- Registers the `talltable` block directive — currently a semantic alias for `@( asciidoc begin )`. Reserved for future enhancement to a more table-specific syntax (see `todo.txt`).
+- Primary use case: tables with multi-line cell content, colspan/rowspan, or complex headers that GFM pipe-table syntax cannot express.
+
+This plugin requires the `asciidoctor` and `nokogiri` gems; per section 9.6, those are mandatory if the plugin file is installed.
+
+## 10. Known Issues
 
 These are areas where current implementation behavior is not committed to the spec and is likely to change.
 
-### 9.1 In-Document Tags Inside Markdown Code Regions
+### 10.1 In-Document Tags Inside Markdown Code Regions
 
 Documark's preprocessor currently scans tag syntax (`@{}`, `@[]`, `@<>`, `@()`) without regard to Markdown code spans (`` `...` ``) or fenced code blocks (```` ``` ````). Tag-like text inside code regions is processed as if it were running prose.
 

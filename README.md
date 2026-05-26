@@ -37,7 +37,7 @@ The current implementation can:
 - read a `data` block for document metadata
 - read either an inline `layout` block or a default layout template
 - render Markdown content to HTML
-- render PDF by printing generated HTML through a headless browser
+- render PDF from generated HTML via the WeasyPrint command-line renderer
 - write raw Markdown-style body output for `markdown` and `text` targets
 
 Current output targets:
@@ -59,13 +59,17 @@ This prototype is implemented in Ruby.
 bundle install
 ```
 
-For PDF output you also need a Chromium-compatible browser available on disk. The current default is:
+For PDF output, Documark calls the [WeasyPrint](https://weasyprint.org/) command-line renderer. WeasyPrint is a Python package, not a Ruby gem, so install it separately:
 
-```text
-/usr/bin/google-chrome
+```sh
+# Debian / Ubuntu
+sudo apt install weasyprint
+
+# Or via pip
+pip install weasyprint
 ```
 
-If your browser lives elsewhere, pass `--browser` or set it in config.
+The `weasyprint` executable must be on `PATH`. If it isn't, `documark process -t pdf` fails with an install-instruction message; HTML, Markdown, and text targets work without it.
 
 ### 2. Render an example to HTML
 
@@ -100,7 +104,6 @@ Common options for `process`:
 - `--input` / `-i`
 - `--output` / `-o`
 - `--target` / `-t`
-- `--browser` / `-b`
 - `--config` / `-c`
 - `--verbose` / `-v`
 - `--debug` / `-d`
@@ -110,6 +113,31 @@ Example:
 ```sh
 bundle exec bin/documark process -i input.dm -o output.html -t html
 ```
+
+## Plugins and Features
+
+Documark functionality is organized into named **features**. Built-in features (`markdown`, `html`, `pdf`, `text`, `epub`, `toc`, `index`, `include`) ship with every install. **Plugins** are independent Ruby files (typically in separate gems) that register additional features at startup. See `doc/documark_spec.md` §9 for the full contract.
+
+A document or layout may declare a `requires:` array in its YAML to fail fast when an expected feature isn't available:
+
+```text
+!! documark document
+!! data
+title: "Quarterly Report"
+requires:
+  - asciidoc
+  - pdf
+!! end
+```
+
+This repository ships a reference `asciidoc` plugin at `lib/documark/plugin/asciidoc.rb`. It activates `@( include 'foo.adoc' )` by routing the file through Asciidoctor. To enable it locally:
+
+```sh
+bundle config set --local with plugin_asciidoc
+bundle install
+```
+
+Plugin load failures are hard fails: if a plugin file is present, it must load completely with all of its dependencies, or the whole invocation aborts with a clear error naming the plugin and the missing dependency.
 
 ## Example Document
 

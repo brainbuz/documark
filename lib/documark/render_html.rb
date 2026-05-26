@@ -25,7 +25,7 @@ module Documark
         layout['index_emitted'] = opts['index_emitted']
       end
       html    = Kramdown::Document.new(prepped).to_html
-      html    = Documark::TagProcessor.postprocess(html)
+      html    = Documark::TagProcessor.postprocess(html, opts)
       compose_html(options, layout, data, html)
     end
 

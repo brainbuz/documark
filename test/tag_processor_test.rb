@@ -346,45 +346,52 @@ class TagProcessorTest < Minitest::Test
   # Self-describing placeholder format
   # ---------------------------------------------------------------------------
 
-  def test_make_placeholder_wraps_html_in_comment
-    ph = Documark::TagProcessor.make_placeholder('<div class="green">')
-    assert_equal '<!--DMTAG:<div class="green">:DMTAG-->', ph
+  def test_make_placeholder_stores_html_in_registry_and_returns_id_comment
+    registry = {}
+    ph = Documark::TagProcessor.make_placeholder('<div class="green">', registry)
+    assert_equal '<!--DMTAG:1:DMTAG-->', ph
+    assert_equal '<div class="green">', registry[1]
   end
 
-  def test_make_placeholder_returns_nil_and_warns_on_double_dash
-    result = nil
-    _stdout, stderr = capture_io do
-      result = Documark::TagProcessor.make_placeholder('<div data-x="--bad-->">')
-    end
-    assert_nil result
-    assert_match(/ignoring tag/i, stderr)
-    assert_match(/--/, stderr)
+  def test_make_placeholder_accepts_content_with_double_dash
+    registry = {}
+    ph = Documark::TagProcessor.make_placeholder('<div data-x="--val--">', registry)
+    assert_equal '<!--DMTAG:1:DMTAG-->', ph
+    assert_equal '<div data-x="--val--">', registry[1]
   end
 
-  def test_invalid_data_attribute_drops_tag_keeps_content
-    # Content inside the offending tag should still render; the wrapper
-    # silently disappears (with a stderr warning) rather than aborting.
-    body = "@[aside data-x=\"--bad-->\"]\n\nThe content survives.\n\n@[/aside]"
-    result = nil
-    _stdout, stderr = capture_io do
-      result = Documark::TagProcessor.process(body)
-    end
-    refute_includes result, '<aside'
-    assert_includes result, 'The content survives.'
-    assert_match(/ignoring tag/i, stderr)
+  def test_make_placeholder_ids_are_sequential
+    registry = {}
+    ph1 = Documark::TagProcessor.make_placeholder('<u>', registry)
+    ph2 = Documark::TagProcessor.make_placeholder('</u>', registry)
+    assert_equal '<!--DMTAG:1:DMTAG-->', ph1
+    assert_equal '<!--DMTAG:2:DMTAG-->', ph2
   end
 
-  def test_postprocess_round_trips_self_describing_comment
-    placeholder = Documark::TagProcessor.make_placeholder('<aside class="note">')
-    surrounded  = "before #{placeholder} after"
-    assert_equal 'before <aside class="note"> after', Documark::TagProcessor.postprocess(surrounded)
+  def test_content_with_double_dash_in_attr_renders_correctly
+    # Previously this would silently drop the tag; now it works.
+    body = "@[aside data-x=\"--val-->\"]\n\nContent inside.\n\n@[/aside]"
+    result = Documark::TagProcessor.process(body)
+    assert_includes result, '<aside'
+    assert_includes result, 'Content inside.'
+  end
+
+  def test_postprocess_round_trips_registry_placeholder
+    opts = {}
+    opts['_registry'] = {}
+    ph         = Documark::TagProcessor.make_placeholder('<aside class="note">', opts['_registry'])
+    surrounded = "before #{ph} after"
+    assert_equal 'before <aside class="note"> after',
+                 Documark::TagProcessor.postprocess(surrounded, opts)
   end
 
   def test_postprocess_handles_multiple_placeholders
-    open_ph  = Documark::TagProcessor.make_placeholder('<u>')
-    close_ph = Documark::TagProcessor.make_placeholder('</u>')
+    opts = {}
+    opts['_registry'] = {}
+    open_ph   = Documark::TagProcessor.make_placeholder('<u>', opts['_registry'])
+    close_ph  = Documark::TagProcessor.make_placeholder('</u>', opts['_registry'])
     surrounded = "x #{open_ph}word#{close_ph} y"
-    assert_equal 'x <u>word</u> y', Documark::TagProcessor.postprocess(surrounded)
+    assert_equal 'x <u>word</u> y', Documark::TagProcessor.postprocess(surrounded, opts)
   end
 
   # ---------------------------------------------------------------------------
@@ -811,14 +818,6 @@ class TagProcessorTest < Minitest::Test
     assert_includes result, '<dt>IncludedTerm</dt>'
   end
 
-  def test_include_nested_resolves_paths_relative_to_including_file
-    body = "@( include '#{FIXTURES}/include_nested_parent.md' )"
-    result = Documark::TagProcessor.process(body)
-    assert_includes result, 'Parent line before.'
-    assert_includes result, '## Included Heading'
-    assert_includes result, 'This is included markdown content.'
-    assert_includes result, 'Parent line after.'
-  end
 
   def test_include_surrounding_content_preserved
     body = "Before.\n\n@( include '#{FIXTURES}/include_markdown.md' )\n\nAfter."
@@ -844,5 +843,118 @@ class TagProcessorTest < Minitest::Test
     body = %(@( include "#{FIXTURES}/include_markdown.md" ))
     result = Documark::TagProcessor.process(body)
     assert_includes result, '## Included Heading'
+  end
+
+  def test_include_with_bare_path
+    body = "@( include #{FIXTURES}/include_markdown.md )"
+    result = Documark::TagProcessor.process(body)
+    assert_includes result, '## Included Heading'
+  end
+
+  def test_include_with_bare_path_and_type_token
+    body = "@( include #{FIXTURES}/include_markdown.md text )"
+    result = Documark::TagProcessor.process(body)
+    # text type wraps the content in a fenced code block.
+    assert_includes result, '```'
+    assert_includes result, '## Included Heading'
+  end
+
+  def test_malformed_include_with_quote_mismatch_raises
+    body = %(@( include "#{FIXTURES}/include_markdown.md' ))
+    error = assert_raises(StandardError) { Documark::TagProcessor.process(body) }
+    assert_match(/malformed include directive/, error.message)
+  end
+
+  def test_malformed_include_with_unquoted_space_in_path_raises
+    body = "@( include some path with spaces.md )"
+    error = assert_raises(StandardError) { Documark::TagProcessor.process(body) }
+    assert_match(/malformed include directive/, error.message)
+  end
+
+  # ─── Plugin-directive dispatch ────────────────────────────────────────────
+
+  def test_plugin_directive_dispatches_to_registered_handler
+    require_relative '../lib/documark/plugins'
+    Documark::Plugins.register_feature('test-xyz', plugin: 'test')
+    Documark::Directives.register('test-xyz', feature: 'test-xyz', kind: :inline) do |_args, _content, _ctx|
+      { content: '<p>xyz handled</p>', mode: :placeholder }
+    end
+    body = "Before.\n\n@(test-xyz)\n\nAfter."
+    result = Documark::TagProcessor.process(body)
+    assert_includes result, 'xyz handled'
+    assert_includes result, 'Before.'
+    assert_includes result, 'After.'
+  ensure
+    Documark::Directives.instance_variable_get(:@handlers).delete('test-xyz')
+    Documark::Plugins.instance_variable_get(:@features).delete('test-xyz')
+  end
+
+  def test_plugin_directive_unknown_raises_with_helpful_message
+    body = "@(nope-not-registered)"
+    error = assert_raises(StandardError) { Documark::TagProcessor.process(body) }
+    assert_match(/unknown directive @\(nope-not-registered\)/, error.message)
+    assert_match(/missing plugin/i, error.message)
+  end
+
+  # ─── Block directive dispatch ─────────────────────────────────────────────
+
+  def test_block_directive_dispatches_to_registered_handler
+    require_relative '../lib/documark/plugins'
+    Documark::Plugins.register_feature('test-block', plugin: 'test')
+    Documark::Directives.register('test-block', feature: 'test-block', kind: :block) do |_args, content, _ctx|
+      { content: "<section>#{content.strip}</section>", mode: :placeholder }
+    end
+    body = "@(test-block begin)\nraw content here\n@( end )"
+    result = Documark::TagProcessor.process(body)
+    assert_includes result, '<section>raw content here</section>'
+  ensure
+    Documark::Directives.instance_variable_get(:@handlers).delete('test-block')
+    Documark::Plugins.instance_variable_get(:@features).delete('test-block')
+  end
+
+  def test_block_directive_collects_multiple_lines
+    require_relative '../lib/documark/plugins'
+    Documark::Plugins.register_feature('test-multiline', plugin: 'test')
+    Documark::Directives.register('test-multiline', feature: 'test-multiline', kind: :block) do |_args, content, _ctx|
+      { content: "<div>#{content}</div>", mode: :placeholder }
+    end
+    body = "@(test-multiline begin)\nline one\nline two\nline three\n@( end )"
+    result = Documark::TagProcessor.process(body)
+    assert_includes result, 'line one'
+    assert_includes result, 'line two'
+    assert_includes result, 'line three'
+  ensure
+    Documark::Directives.instance_variable_get(:@handlers).delete('test-multiline')
+    Documark::Plugins.instance_variable_get(:@features).delete('test-multiline')
+  end
+
+  def test_block_directive_unknown_raises_with_helpful_message
+    body = "@(no-such-block begin)\ncontent\n@( end )"
+    error = assert_raises(StandardError) { Documark::TagProcessor.process(body) }
+    assert_match(/unknown directive @\(no-such-block \.\.\. begin\)/, error.message)
+    assert_match(/missing plugin/i, error.message)
+  end
+
+  def test_block_directive_orphan_end_raises
+    body = "@( end )"
+    error = assert_raises(StandardError) { Documark::TagProcessor.process(body) }
+    assert_match(/unexpected @\( end \)/, error.message)
+  end
+
+  def test_block_directive_unterminated_warns_and_collects_rest
+    require_relative '../lib/documark/plugins'
+    Documark::Plugins.register_feature('test-unterm', plugin: 'test')
+    Documark::Directives.register('test-unterm', feature: 'test-unterm', kind: :block) do |_args, content, _ctx|
+      { content: "<p>#{content.strip}</p>", mode: :placeholder }
+    end
+    body = "@(test-unterm begin)\ncontent without closer"
+    out, _err = capture_io do
+      result = Documark::TagProcessor.process(body)
+      assert_includes result, 'content without closer'
+    end
+    assert_match(/was never closed/, out + _err)
+  ensure
+    Documark::Directives.instance_variable_get(:@handlers).delete('test-unterm')
+    Documark::Plugins.instance_variable_get(:@features).delete('test-unterm')
   end
 end

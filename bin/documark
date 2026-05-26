@@ -1,6 +1,11 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# Put this checkout's lib/ on the load path so in-tree plugins are
+# discoverable by Documark::Plugins.discover! the same way an installed
+# plugin gem would be.
+$LOAD_PATH.unshift(File.expand_path('../lib', __dir__))
+
 require 'slop'
 require 'kramdown'
 require_relative '../lib/documark/runtime'
@@ -9,6 +14,7 @@ require_relative '../lib/documark/config'
 require_relative '../lib/documark/export_clean'
 require_relative '../lib/documark/render_html'
 require_relative '../lib/documark/render_pdf'
+require_relative '../lib/documark/plugins'
 
 extend Documark::Runtime
 extend Documark::Parser
@@ -17,8 +23,13 @@ extend Documark::ExportClean
 extend Documark::RenderHtml
 extend Documark::RenderPdf
 
+Documark::Targets.register('html',     feature: 'html')     { |ctx| write_page(ctx['output'], ctx['page']) }
+Documark::Targets.register('pdf',      feature: 'pdf')      { |ctx| render_pdf(ctx['page'], ctx['output'], ctx['layout']) }
+Documark::Targets.register('markdown', feature: 'markdown') { |ctx| write_markdown_output(ctx['output'], ctx['doc']['body']) }
+Documark::Targets.register('text',     feature: 'text')     { |ctx| write_markdown_output(ctx['output'], ctx['doc']['body']) }
+Documark::Targets.register('epub',     feature: 'epub')     { |_ctx| raise NotImplementedError, "Target 'epub' is not yet implemented." }
+
 DEFAULT_RUNTIME_CONFIG = {
-  'browser' => '/usr/bin/google-chrome',
   'default_layout' => File.expand_path('../lib/documark/default.dml', __dir__)
 }.freeze
 
@@ -38,7 +49,7 @@ def merge_config(file_config, options)
   merged
 end
 
-def process_action(config, valid_targets)
+def process_action(config)
   %w[input output target].each do |required_key|
     if config[required_key].nil? || config[required_key].to_s.strip.empty?
       warn "Missing required option for process action: --#{required_key}"
@@ -46,18 +57,18 @@ def process_action(config, valid_targets)
     end
   end
 
-  unless valid_targets.include?(config['target'])
-    warn "Invalid target '#{config['target']}'. Supported targets: #{valid_targets.join(', ')}"
-    exit 1
-  end
+  ordie { Documark::Plugins.require_features!([config['target']], source: '--target') }
 
   document = read_document(config['input'])
   header = document['header']
   doc = document['doc']
   data = document['data']
   layout = read_layout(doc, config)
+
+  required = Array(data['requires']) | Array(layout['requires'])
+  ordie { Documark::Plugins.require_features!(required, source: config['input']) }
+
   layout['container_class'] = '' if %w[pdf epub].include?(config['target'])
-  page = render_page(config, layout, data, doc['body']) if %w[html pdf epub].include?(config['target'])
 
   if config["verbose"]
     puts "--- Header ---"
@@ -66,25 +77,32 @@ def process_action(config, valid_targets)
     pp data
     puts "--- Config ---"
     pp config
+    puts "--- Features ---"
+    Documark::Plugins.features.each do |name, meta|
+      parts = []
+      if (exts = Documark::Include.exts_for(name))
+        parts << "include-type '#{name}'#{exts.empty? ? '' : " (#{exts.join(', ')})"}"
+      end
+      if Documark::Directives.lookup(name)
+        kind = Documark::Directives.kind_for(name)
+        parts << "directive '#{name}' (#{kind})"
+      end
+      parts << "target '#{name}'" if Documark::Targets.lookup(name)
+      origin = meta[:plugin] || 'unknown'
+      puts "  '#{name}' [#{origin}]#{parts.empty? ? '' : " — #{parts.join(', ')}"}"
+    end
   end
 
-  case config['target']
-  when 'pdf'
-    puts "print to #{config['output']}" if config['verbose']
-    render_pdf(page, config['output'], layout)
-  when 'html'
-    puts "write to #{config['output']}" if config['verbose']
-    write_page(config['output'], page)
-  when 'epub'
-    ordie { raise NotImplementedError.new("Target 'epub' will likely use the HTML intermediate pipeline but is not implemented yet (...)") }
-  when 'markdown', 'text'
-    puts "write #{config['target']} (markdown alias) to #{config['output']}" if config['verbose']
-    write_markdown_output(config['output'], doc['body'])
-  end
+  target  = config['target']
+  handler = Documark::Targets.lookup(target)
+  page    = render_page(config, layout, data, doc['body']) if %w[html pdf epub].include?(target)
+  ctx     = { 'output' => config['output'], 'page' => page, 'layout' => layout, 'doc' => doc }
+  puts "write to #{config['output']}" if config['verbose']
+  ordie { handler.call(ctx) }
 end
 
 valid_actions = %w[process config_new template_new]
-valid_targets = %w[html pdf markdown text epub]
+valid_targets = Documark::Targets.registered
 action_index = ARGV.index { |token| valid_actions.include?(token) }
 
 if action_index.nil?
@@ -93,7 +111,6 @@ if action_index.nil?
     warn "Run 'documark --help' for usage."
     exit 1
   end
-  action = 'process'
   cli_argv = ARGV.dup
 else
   action = ARGV[action_index]
@@ -124,7 +141,6 @@ begin
     o.string  '-i', '--input',   'Input .dm file'
     o.string  '-o', '--output',  'Output file path'
     o.string  '-t', '--target',  "Output format (#{valid_targets.join(', ')})"
-    o.string  '-b', '--browser', 'Browser path for headless PDF rendering'
     o.bool    '-v', '--verbose', 'Verbose output'
     o.string  '-c', '--config',  'Config file path'
     o.bool    '-d', '--debug',   'Show full stack traces on errors'
@@ -143,6 +159,8 @@ options['target'] = options['target'].to_s.downcase
 
 Documark::Runtime.debug = options['debug']
 
+ordie { Documark::Plugins.discover!(verbose: options['verbose']) }
+
 file_config = read_config(options['config'])
 config = merge_config(file_config, options)
 
@@ -152,7 +170,7 @@ when 'config_new'
 when 'template_new'
   Documark::Config.template_new(file_config, options)
 when 'process'
-  process_action(config, valid_targets)
+  process_action(config)
 else
   warn "Unsupported action '#{action}'. Supported actions: #{valid_actions.join(', ')}"
   warn "Run 'documark --help' for usage."

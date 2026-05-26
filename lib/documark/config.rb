@@ -54,7 +54,7 @@ module Documark
       ordie do
         content = File.read(path)
         config = Psych.safe_load(content, aliases: false) || {}
-        raise StandardError.new('Config file must be a mapping') unless config.is_a?(Hash)
+        raise StandardError, 'Config file must be a mapping' unless config.is_a?(Hash)
         config = config.transform_keys(&:to_s)
         config['default_layout'] = File.expand_path(config['default_layout']) if config['default_layout']
         config

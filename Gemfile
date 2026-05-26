@@ -2,11 +2,8 @@
 
 source 'https://rubygems.org'
 
-gem 'hexapdf'
-gem 'kramdown'
-gem 'psych'
-gem 'slop'
-gem 'erb'
+gem 'documark', path: '.'
+gem 'documark-plugin-asciidoc', path: 'plugins/asciidoc'
 
 group :test do
   gem 'minitest'
