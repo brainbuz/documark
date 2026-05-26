@@ -7,10 +7,10 @@ def apply_test_options(task)
   task.options = opts.split(/\s+/) unless opts.empty?
 end
 
-desc 'Run all tests'
+desc 'Run all tests (core + plugins)'
 Rake::TestTask.new(:test) do |t|
   t.libs << 'test'
-  t.pattern = 'test/**/*_test.rb'
+  t.pattern = ['test/**/*_test.rb', 'plugins/**/test/**/*_test.rb']
   apply_test_options(t)
 end
 
@@ -19,6 +19,20 @@ namespace :test do
   Rake::TestTask.new(:cli) do |t|
     t.libs << 'test'
     t.pattern = 'test/cli_test.rb'
+    apply_test_options(t)
+  end
+
+  desc 'Run core library tests only (exclude plugins)'
+  Rake::TestTask.new(:core) do |t|
+    t.libs << 'test'
+    t.pattern = 'test/**/*_test.rb'
+    apply_test_options(t)
+  end
+
+  desc 'Run plugin tests only'
+  Rake::TestTask.new(:plugins) do |t|
+    t.libs << 'test'
+    t.pattern = 'plugins/**/test/**/*_test.rb'
     apply_test_options(t)
   end
 
@@ -33,6 +47,7 @@ namespace :test do
       require 'simplecov'
       SimpleCov.collate Dir['coverage/.resultset*.json'] do
         track_files 'lib/**/*.rb'
+        track_files 'plugins/**/lib/**/*.rb'
       end
     ensure
       ENV['COVERAGE'] = original_coverage
