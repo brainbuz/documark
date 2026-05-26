@@ -13,11 +13,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    env:
-      # Install optional plugin groups so their tests run in CI.
-      # When documark plugins are released as separate gems this can be
-      # replaced with explicit gem installs per plugin.
-      BUNDLE_WITH: plugin_asciidoc
     strategy:
       fail-fast: false
       matrix:
