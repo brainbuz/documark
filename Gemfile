@@ -2,11 +2,18 @@
 
 source 'https://rubygems.org'
 
-gem 'documark', path: '.'
-gem 'documark-plugin-asciidoc', path: 'plugins/asciidoc'
+# Pull runtime and shared development dependencies from documark.gemspec.
+gemspec
 
-group :test do
-  gem 'minitest'
-  gem 'rake'
-  gem 'simplecov', require: false
+# In monorepo development/testing, always resolve Documark plugin gems locally
+# so CI and containers test the checked-out code, not published gems.
+# Set DOCUMARK_RELEASE_DEPS=1 to emulate release-style dependency resolution.
+if ENV['DOCUMARK_RELEASE_DEPS'] != '1'
+  group :plugin_asciidoc do
+    gem 'documark-plugin-asciidoc', path: 'plugins/asciidoc'
+  end
+end
+
+group :development, :test do
+  gem 'rubocop', require: false
 end

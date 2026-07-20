@@ -25,13 +25,20 @@ extend Documark::RenderPdf
 
 Documark::Targets.register('html',     feature: 'html')     { |ctx| write_page(ctx['output'], ctx['page']) }
 Documark::Targets.register('pdf',      feature: 'pdf')      { |ctx| render_pdf(ctx['page'], ctx['output'], ctx['layout']) }
-Documark::Targets.register('markdown', feature: 'markdown') { |ctx| write_markdown_output(ctx['output'], ctx['doc']['body']) }
-Documark::Targets.register('text',     feature: 'text')     { |ctx| write_markdown_output(ctx['output'], ctx['doc']['body']) }
+Documark::Targets.register('markdown', feature: 'markdown') { |ctx| write_markdown_output(ctx['output'], ctx['doc']['body'], ctx['data']) }
+Documark::Targets.register('text',     feature: 'text')     { |ctx| write_markdown_output(ctx['output'], ctx['doc']['body'], ctx['data']) }
 Documark::Targets.register('epub',     feature: 'epub')     { |_ctx| raise NotImplementedError, "Target 'epub' is not yet implemented." }
 
 DEFAULT_RUNTIME_CONFIG = {
   'default_layout' => File.expand_path('../lib/documark/default.dml', __dir__)
 }.freeze
+
+def parse_defines(list)
+  Array(list).each_with_object({}) do |item, acc|
+    key, sep, value = item.to_s.partition('=')
+    acc[key] = sep.empty? ? true : value
+  end
+end
 
 def merge_config(file_config, options)
   merged = DEFAULT_RUNTIME_CONFIG.dup
@@ -63,6 +70,7 @@ def process_action(config)
   header = document['header']
   doc = document['doc']
   data = document['data']
+  data = data.merge(parse_defines(Array(config['define'])))
   layout = read_layout(doc, config)
 
   required = Array(data['requires']) | Array(layout['requires'])
@@ -96,7 +104,7 @@ def process_action(config)
   target  = config['target']
   handler = Documark::Targets.lookup(target)
   page    = render_page(config, layout, data, doc['body']) if %w[html pdf epub].include?(target)
-  ctx     = { 'output' => config['output'], 'page' => page, 'layout' => layout, 'doc' => doc }
+  ctx     = { 'output' => config['output'], 'page' => page, 'layout' => layout, 'doc' => doc, 'data' => data }
   puts "write to #{config['output']}" if config['verbose']
   ordie { handler.call(ctx) }
 end
@@ -144,6 +152,7 @@ begin
     o.bool    '-v', '--verbose', 'Verbose output'
     o.string  '-c', '--config',  'Config file path'
     o.bool    '-d', '--debug',   'Show full stack traces on errors'
+    o.array   '--define', 'Set data key (key=value or bare key), repeatable; overrides document data'
     o.on      '-h', '--help',    'Show this message' do
       puts o
       exit

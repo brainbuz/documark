@@ -26,6 +26,11 @@ module Documark
   module Include
     NAME_RE = /\A[a-z][a-z0-9-]*\z/
 
+    # Argument grammar for @( include 'path' [type] ): a single quoted or bare
+    # path followed by an optional type token. Shared with Container asset
+    # discovery so both parse include arguments identically.
+    ARG_RE = /\A(?:'([^']+)'|"([^"]+)"|([^\s'"()]+))\s*([a-z][a-z0-9_-]*)?\z/
+
     @handlers = {}
     @exts     = {}
 

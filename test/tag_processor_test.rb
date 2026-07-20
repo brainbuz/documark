@@ -2,6 +2,9 @@
 
 require_relative 'test_helper'
 require_relative '../lib/documark/tag_processor'
+# Built-in directives (include, toc, index, if) are registered in plugins.rb;
+# load it up front so these tests are robust regardless of run order.
+require_relative '../lib/documark/plugins'
 
 class TagProcessorTest < Minitest::Test
   # ---------------------------------------------------------------------------
@@ -956,5 +959,137 @@ class TagProcessorTest < Minitest::Test
   ensure
     Documark::Directives.instance_variable_get(:@handlers).delete('test-unterm')
     Documark::Plugins.instance_variable_get(:@features).delete('test-unterm')
+  end
+
+  # ─── @( if ) conditional block directive ──────────────────────────────────
+  # `if` is a permanent built-in registered in plugins.rb — no registry
+  # cleanup for it (do NOT delete it in ensure blocks).
+
+  def test_if_true_keeps_content
+    require_relative '../lib/documark/plugins'
+    body = "@( if show begin )\nkept content\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => { 'show' => true } })
+    assert_includes result, 'kept content'
+  end
+
+  def test_if_false_drops_content
+    require_relative '../lib/documark/plugins'
+    body = "@( if show begin )\nkept content\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => { 'show' => false } })
+    refute_includes result, 'kept content'
+  end
+
+  def test_if_false_selects_else_branch
+    require_relative '../lib/documark/plugins'
+    body = "@( if show begin )\ntrue branch\n@( else )\nelse branch\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => { 'show' => false } })
+    refute_includes result, 'true branch'
+    assert_includes result, 'else branch'
+  end
+
+  def test_if_true_selects_true_branch_over_else
+    require_relative '../lib/documark/plugins'
+    body = "@( if show begin )\ntrue branch\n@( else )\nelse branch\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => { 'show' => true } })
+    assert_includes result, 'true branch'
+    refute_includes result, 'else branch'
+  end
+
+  def test_if_false_no_else_yields_empty
+    require_relative '../lib/documark/plugins'
+    body = "@( if show begin )\nkept content\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => { 'show' => false } })
+    assert_equal '', result.strip
+  end
+
+  def test_if_negated_condition
+    require_relative '../lib/documark/plugins'
+    body = "@( if !show begin )\nshown when absent\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => {} })
+    assert_includes result, 'shown when absent'
+  end
+
+  def test_if_equality_with_non_string_data_value
+    require_relative '../lib/documark/plugins'
+    body = "@( if level=5 begin )\nlevel five\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => { 'level' => 5 } })
+    assert_includes result, 'level five'
+  end
+
+  def test_if_nested_outer_true_inner_false
+    require_relative '../lib/documark/plugins'
+    body = "@( if outer begin )\nouter-top\n@( if inner begin )\ninner-content\n@( end )\nouter-bottom\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => { 'outer' => true, 'inner' => false } })
+    assert_includes result, 'outer-top'
+    assert_includes result, 'outer-bottom'
+    refute_includes result, 'inner-content'
+  end
+
+  def test_if_nested_outer_false_drops_everything
+    require_relative '../lib/documark/plugins'
+    body = "@( if outer begin )\n@( if inner begin )\ninner-content\n@( end )\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => { 'outer' => false, 'inner' => true } })
+    refute_includes result, 'inner-content'
+  end
+
+  def test_if_nested_inside_else_branch
+    require_relative '../lib/documark/plugins'
+    body = "@( if outer begin )\nouter-true\n@( else )\n@( if inner begin )\ninner-content\n@( end )\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => { 'outer' => false, 'inner' => true } })
+    refute_includes result, 'outer-true'
+    assert_includes result, 'inner-content'
+  end
+
+  def test_if_kept_branch_reprocesses_block_tag
+    require_relative '../lib/documark/plugins'
+    body = "@( if show begin )\n@{ .callout }\nboxed text\n@{}\n@( end )"
+    result = Documark::TagProcessor.process(body, { 'data' => { 'show' => true } })
+    assert_includes result, '<div class="callout">'
+    assert_includes result, 'boxed text'
+    assert_includes result, '</div>'
+  end
+
+  def test_if_orphan_else_raises
+    require_relative '../lib/documark/plugins'
+    body = "@( else )"
+    error = assert_raises(StandardError) { Documark::TagProcessor.process(body) }
+    assert_match(/unexpected @\( else \)/, error.message)
+  end
+
+  def test_if_unterminated_warns_and_treats_rest_as_content
+    require_relative '../lib/documark/plugins'
+    body = "@( if show begin )\nkept content without closer"
+    out, err = capture_io do
+      result = Documark::TagProcessor.process(body, { 'data' => { 'show' => true } })
+      assert_includes result, 'kept content without closer'
+    end
+    assert_match(/was never closed/, out + err)
+  end
+
+  def test_if_malformed_condition_raises
+    require_relative '../lib/documark/plugins'
+    body = "@( if 1bad begin )\ncontent\n@( end )"
+    error = assert_raises(StandardError) { Documark::TagProcessor.process(body, { 'data' => {} }) }
+    assert_match(/malformed/, error.message)
+  end
+
+  def test_block_directive_depth_aware_pairing_collects_nested_pair
+    require_relative '../lib/documark/plugins'
+    Documark::Plugins.register_feature('test-depth', plugin: 'test')
+    captured = nil
+    Documark::Directives.register('test-depth', feature: 'test-depth', kind: :block) do |_args, content, _ctx|
+      captured = content
+      { content: "<section>#{content}</section>", mode: :placeholder }
+    end
+    body = "@(test-depth begin)\nouter line\n@( if x begin )\ninner\n@( end )\ntrailing\n@( end )"
+    Documark::TagProcessor.process(body, { 'data' => { 'x' => true } })
+    assert_includes captured, 'outer line'
+    assert_includes captured, '@( if x begin )'
+    assert_includes captured, 'inner'
+    assert_includes captured, '@( end )'
+    assert_includes captured, 'trailing'
+  ensure
+    Documark::Directives.instance_variable_get(:@handlers).delete('test-depth')
+    Documark::Plugins.instance_variable_get(:@features).delete('test-depth')
   end
 end

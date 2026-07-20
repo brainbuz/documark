@@ -130,12 +130,15 @@ requires:
 !! end
 ```
 
-This repository ships a reference `asciidoc` plugin at `lib/documark/plugin/asciidoc.rb`. It activates `@( include 'foo.adoc' )` by routing the file through Asciidoctor. To enable it locally:
+This repository ships a reference `asciidoc` plugin at `lib/documark/plugin/asciidoc.rb`. It activates `@( include 'foo.adoc' )` by routing the file through Asciidoctor. In monorepo development and CI, the Gemfile resolves this plugin from the local path so tests always run against checked-out code.
 
 ```sh
-bundle config set --local with plugin_asciidoc
 bundle install
 ```
+
+To emulate release-style dependency resolution (without local path plugins), set `DOCUMARK_RELEASE_DEPS=1`.
+
+Plugin tests in `plugins/asciidoc/test/` load core Documark directly from the repository `lib/` path (load-path precedence) rather than through an installed `documark` gem, to avoid stale cached gem copies during active development.
 
 Plugin load failures are hard fails: if a plugin file is present, it must load completely with all of its dependencies, or the whole invocation aborts with a clear error naming the plugin and the missing dependency.
 

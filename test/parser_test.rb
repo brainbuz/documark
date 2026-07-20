@@ -73,6 +73,84 @@ class DocumarkParserTest < Minitest::Test
     assert_includes parsed['body'], '# Body'
   end
 
+  def test_split_documark_sections_extracts_assets_and_bounds_body
+    content = <<~DOC
+      !! documark document
+      !! data
+      title: "Example"
+      !! end
+
+      # Body
+      hello
+      !! assets
+      SGVsbG8=
+      d29ybGQ=
+      !! end
+    DOC
+
+    parsed = Documark::Parser.split_documark_sections(content)
+
+    assert_includes parsed['body'], '# Body'
+    refute_includes parsed['body'], '!! assets'
+    refute_includes parsed['body'], 'SGVsbG8='
+    assert_includes parsed['assets'], 'SGVsbG8='
+    assert_includes parsed['assets'], 'd29ybGQ='
+  end
+
+  def test_split_documark_sections_assets_nil_when_absent
+    content = <<~DOC
+      !! documark document
+      !! data
+      title: "Example"
+      !! end
+
+      # Body
+    DOC
+
+    parsed = Documark::Parser.split_documark_sections(content)
+
+    assert_nil parsed['assets']
+    assert_includes parsed['body'], '# Body'
+  end
+
+  def test_split_documark_sections_raises_for_unterminated_assets_block
+    content = <<~DOC
+      !! documark document
+      !! data
+      title: "Example"
+      !! end
+      # Body
+      !! assets
+      SGVsbG8=
+    DOC
+
+    error = assert_raises(StandardError) do
+      Documark::Parser.split_documark_sections(content)
+    end
+
+    assert_equal 'Unterminated assets block', error.message
+  end
+
+  def test_split_documark_sections_rejects_content_after_assets_section
+    content = <<~DOC
+      !! documark document
+      !! data
+      title: "Example"
+      !! end
+      # Body
+      !! assets
+      SGVsbG8=
+      !! end
+      trailing junk
+    DOC
+
+    error = assert_raises(StandardError) do
+      Documark::Parser.split_documark_sections(content)
+    end
+
+    assert_match(/content after !! assets section is not allowed/, error.message)
+  end
+
   def test_read_layout_uses_explicit_default_layout_path
     Dir.mktmpdir('documark-parser-test') do |tmpdir|
       dml_path = File.join(tmpdir, 'custom.dml')

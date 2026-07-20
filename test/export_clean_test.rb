@@ -63,4 +63,65 @@ class DocumarkExportCleanTest < Minitest::Test
       assert_equal "Line\n", File.read(output_path)
     end
   end
+
+  def test_write_markdown_output_resolves_conditional_true_branch
+    Dir.mktmpdir('documark-export-clean-test') do |tmpdir|
+      output_path = File.join(tmpdir, 'out.md')
+      source = "@( if draft begin )\nDRAFT TEXT\n@( else )\nFINAL TEXT\n@( end )\n"
+
+      Documark::ExportClean.write_markdown_output(output_path, source, { 'draft' => true })
+
+      output = File.read(output_path)
+      assert_includes output, 'DRAFT TEXT'
+      refute_includes output, 'FINAL TEXT'
+    end
+  end
+
+  def test_write_markdown_output_resolves_conditional_else_branch
+    Dir.mktmpdir('documark-export-clean-test') do |tmpdir|
+      output_path = File.join(tmpdir, 'out.md')
+      source = "@( if draft begin )\nDRAFT TEXT\n@( else )\nFINAL TEXT\n@( end )\n"
+
+      Documark::ExportClean.write_markdown_output(output_path, source, { 'draft' => false })
+
+      output = File.read(output_path)
+      refute_includes output, 'DRAFT TEXT'
+      assert_includes output, 'FINAL TEXT'
+    end
+  end
+
+  def test_cleanup_markdown_output_strips_full_line_directives
+    source = "Intro.\n@(toc)\n@( include 'x.md' )\n@( end )\nOutro.\n"
+    cleaned = Documark::ExportClean.cleanup_markdown_output(source)
+
+    refute_includes cleaned, '@(toc)'
+    refute_includes cleaned, "@( include 'x.md' )"
+    refute_includes cleaned, '@( end )'
+    assert_includes cleaned, 'Intro.'
+    assert_includes cleaned, 'Outro.'
+  end
+
+  def test_cleanup_markdown_output_removes_inline_index_tag
+    cleaned = Documark::ExportClean.cleanup_markdown_output("See the @(# widget) entry.")
+    refute_includes cleaned, '@(# widget)'
+    assert_includes cleaned, 'See the'
+    assert_includes cleaned, 'entry.'
+  end
+
+  def test_cleanup_markdown_output_reduces_index_shorthand
+    cleaned = Documark::ExportClean.cleanup_markdown_output("See the @#widget entry and @# gadget too.")
+    refute_includes cleaned, '@#widget'
+    refute_includes cleaned, '@# gadget'
+    assert_includes cleaned, 'See the widget entry and gadget too.'
+  end
+
+  def test_write_markdown_output_default_data_arg_still_works
+    Dir.mktmpdir('documark-export-clean-test') do |tmpdir|
+      output_path = File.join(tmpdir, 'out.md')
+
+      Documark::ExportClean.write_markdown_output(output_path, "Plain text.\n")
+
+      assert_equal "Plain text.\n", File.read(output_path)
+    end
+  end
 end

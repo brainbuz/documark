@@ -125,6 +125,143 @@ class DocumarkCliTest < Minitest::Test
     end
   end
 
+  def test_html_target_with_define_selects_draft_branch
+    Dir.mktmpdir('documark-cli-test') do |tmpdir|
+      input_path = File.join(tmpdir, 'conditional.dm')
+      output_path = File.join(tmpdir, 'out.html')
+
+      File.write(input_path, <<~DOC)
+        !! documark document
+        !! data
+        title: "Conditional Test"
+        !! end
+        # Heading
+
+        @( if draft begin )
+        DRAFT TEXT
+        @( else )
+        FINAL TEXT
+        @( end )
+      DOC
+
+      _stdout, stderr, status = run_cli(
+        'process',
+        '--input', input_path,
+        '--output', output_path,
+        '--target', 'html',
+        '--define', 'draft'
+      )
+
+      assert status.success?, stderr
+      html = File.read(output_path)
+      assert_includes html, 'DRAFT TEXT'
+      refute_includes html, 'FINAL TEXT'
+    end
+  end
+
+  def test_html_target_without_define_selects_else_branch
+    Dir.mktmpdir('documark-cli-test') do |tmpdir|
+      input_path = File.join(tmpdir, 'conditional.dm')
+      output_path = File.join(tmpdir, 'out.html')
+
+      File.write(input_path, <<~DOC)
+        !! documark document
+        !! data
+        title: "Conditional Test"
+        !! end
+        # Heading
+
+        @( if draft begin )
+        DRAFT TEXT
+        @( else )
+        FINAL TEXT
+        @( end )
+      DOC
+
+      _stdout, stderr, status = run_cli(
+        'process',
+        '--input', input_path,
+        '--output', output_path,
+        '--target', 'html'
+      )
+
+      assert status.success?, stderr
+      html = File.read(output_path)
+      refute_includes html, 'DRAFT TEXT'
+      assert_includes html, 'FINAL TEXT'
+    end
+  end
+
+  def test_markdown_target_with_define_selects_branch_and_strips_directives
+    Dir.mktmpdir('documark-cli-test') do |tmpdir|
+      input_path = File.join(tmpdir, 'conditional.dm')
+      output_path = File.join(tmpdir, 'out.md')
+
+      File.write(input_path, <<~DOC)
+        !! documark document
+        !! data
+        title: "Conditional Test"
+        !! end
+        # Heading
+
+        @( if draft begin )
+        DRAFT TEXT
+        @( else )
+        FINAL TEXT
+        @( end )
+      DOC
+
+      _stdout, stderr, status = run_cli(
+        'process',
+        '--input', input_path,
+        '--output', output_path,
+        '--target', 'markdown',
+        '--define', 'draft'
+      )
+
+      assert status.success?, stderr
+      output = File.read(output_path)
+      assert_includes output, 'DRAFT TEXT'
+      refute_includes output, 'FINAL TEXT'
+      refute_includes output, '@('
+    end
+  end
+
+  def test_define_overrides_document_data
+    Dir.mktmpdir('documark-cli-test') do |tmpdir|
+      input_path = File.join(tmpdir, 'conditional.dm')
+      output_path = File.join(tmpdir, 'out.html')
+
+      File.write(input_path, <<~DOC)
+        !! documark document
+        !! data
+        title: "Conditional Test"
+        audience: public
+        !! end
+        # Heading
+
+        @( if audience=internal begin )
+        INTERNAL TEXT
+        @( else )
+        PUBLIC TEXT
+        @( end )
+      DOC
+
+      _stdout, stderr, status = run_cli(
+        'process',
+        '--input', input_path,
+        '--output', output_path,
+        '--target', 'html',
+        '--define', 'audience=internal'
+      )
+
+      assert status.success?, stderr
+      html = File.read(output_path)
+      assert_includes html, 'INTERNAL TEXT'
+      refute_includes html, 'PUBLIC TEXT'
+    end
+  end
+
   def test_fails_when_data_section_is_unterminated
     _stdout, stderr, status = run_cli(
       'process',

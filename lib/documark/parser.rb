@@ -124,14 +124,34 @@ module Documark
       i += 1 while i < lines.length && lines[i].strip.empty?
       layout, i = extract_named_section(lines, i, "layout")
 
-      body_lines = lines[i..] || []
+      # Scan for a top-level `!! assets` section; it must be the last section
+      # in the file. Everything before it is body; the archive is captured
+      # verbatim and nothing but blank lines may follow its `!! end`.
+      rest = lines[i..] || []
+      assets_idx = rest.find_index do |line|
+        header_line = parse_header(line)
+        header_line && header_line["context"] == "assets"
+      end
+
+      if assets_idx.nil?
+        assets = nil
+        body_lines = rest
+      else
+        body_lines = rest[0...assets_idx]
+        assets, after = extract_named_section(rest, assets_idx, "assets")
+        trailing = rest[after..] || []
+        unless trailing.all? { |line| line.strip.empty? }
+          raise StandardError, "content after !! assets section is not allowed"
+        end
+      end
 
       {
         "header" => header,
         "header_directive" => directive,
         "data" => data,
         "layout" => layout,
-        "body" => body_lines.join
+        "body" => body_lines.join,
+        "assets" => assets
       }
     end
 

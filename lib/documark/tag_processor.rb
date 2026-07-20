@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative 'conditionals'
+
 module Documark
   module TagProcessor
     # ── Block/semantic/directive tag patterns ──────────────────────────────────
@@ -266,7 +268,7 @@ module Documark
         @lines          = body.lines(chomp: true)
         @out            = []
         @opts           = opts
-        @data           = opts
+        @data           = opts['data'] || {}
         @opts['_registry'] ||= {}
         @toc_emitted    = false
         @index_emitted  = false
@@ -307,6 +309,15 @@ module Documark
         if is_block
           raw_lines, next_pos = _scan_raw_block(current_pos, name)
           result = handler.call(args, raw_lines.join("\n"), self)
+          # A block handler that returns :passthrough replaces the ENTIRE block
+          # (opener through matching @( end )) with its content, which is then
+          # re-walked so nested directives inside it resolve. Splicing (as for
+          # the inline form) would leave the original opener/end in the stream.
+          if _passthrough?(result)
+            content = (result[:content] || result['content']).to_s
+            @lines[current_pos...next_pos] = content.lines(chomp: true)
+            return current_pos
+          end
         else
           result = handler.call(args, nil, self)
           next_pos = current_pos + 1
@@ -314,6 +325,11 @@ module Documark
 
         _apply_handler_result(result, current_pos)
         next_pos
+      end
+
+      # True when a handler result requests passthrough splicing.
+      def _passthrough?(result)
+        result.is_a?(Hash) && (result[:mode] || result['mode']) == :passthrough
       end
 
       # Apply a handler's return value. nil = handler did its own work.
@@ -379,15 +395,24 @@ module Documark
         end
       end
 
-      # Collect raw lines from after start_index until @( end ) or end-of-input.
-      # Does NOT run _inline — content is passed verbatim to block directive
-      # handlers. Returns [lines_array, next_index].
+      # Collect raw lines from after start_index until the MATCHING @( end ),
+      # depth-aware: nested @( x ... begin ) ... @( end ) pairs are counted so
+      # only the close that balances this opener terminates the block. Does NOT
+      # run _inline — content is passed verbatim to block directive handlers.
+      # Returns [lines_array, next_index].
       def _scan_raw_block(start_index, name)
         lines = []
+        depth = 0
         i = start_index + 1
         while i < @lines.length
-          return [lines, i + 1] if @lines[i].strip.match?(BLOCK_CLOSE_RE)
+          stripped = @lines[i].strip
+          if stripped.match?(BLOCK_CLOSE_RE)
+            return [lines, i + 1] if depth.zero?
 
+            depth -= 1
+          elsif (m = stripped.match(DIRECTIVE_RE)) && m[3]
+            depth += 1
+          end
           lines << @lines[i]
           i += 1
         end
@@ -505,6 +530,13 @@ module Documark
           elsif line.match(BLOCK_CLOSE_RE)
             raise StandardError,
                   "documark: unexpected @( end ) — no @( ... begin ) preceded this."
+          elsif line.match(Conditionals::ELSE_RE)
+            # @( else ) also matches DIRECTIVE_RE as an inline directive named
+            # "else"; catch it here first. A well-formed @( else ) is consumed
+            # inside a block by _scan_raw_block, so reaching it in run means it
+            # is orphaned outside any @( if ... begin ) block.
+            raise StandardError,
+                  "documark: unexpected @( else ) — no open @( if ... begin )"
           elsif (m = line.match(DIRECTIVE_RE))
             name      = m[1]
             args      = (m[2] || '').strip

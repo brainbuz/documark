@@ -95,6 +95,7 @@ end
 require_relative 'directives'
 require_relative 'include'
 require_relative 'targets'
+require_relative 'conditionals'
 
 module Documark
   module Plugins
@@ -138,10 +139,8 @@ module Documark
   module Plugins
     # @( include 'path' [type] ) — built-in extensible directive.
     register('include', plugin: 'core', description: '@( include ) directive') do |f|
-      include_arg_re = /\A(?:'([^']+)'|"([^"]+)"|([^\s'"()]+))\s*([a-z][a-z0-9_-]*)?\z/
-
       f.register_directive('include', form: :inline) do |args, _content, ctx|
-        m = args.match(include_arg_re)
+        m = args.match(Documark::Include::ARG_RE)
         unless m
           raise StandardError,
                 "documark: malformed include directive: @( include #{args} )\n" \
@@ -205,6 +204,15 @@ module Documark
       end
     end
 
+    register('if', plugin: 'core', description: '@( if ) conditional content') do |f|
+      f.register_directive('if', form: :block) do |args, content, ctx|
+        keep = Documark::Conditionals.evaluate(args, ctx.data)
+        true_lines, else_lines = Documark::Conditionals.split_branches(content.lines(chomp: true))
+        chosen = keep ? true_lines : else_lines
+        chosen.empty? ? nil : { content: chosen.join("\n"), mode: :passthrough }
+      end
+    end
+
     # Targets are stub-registered here so feature validation works at parse time.
     # The real handlers (which invoke the render pipeline) are registered in
     # bin/documark after all rendering modules have been mixed in.
@@ -227,5 +235,9 @@ module Documark
     register('epub', plugin: 'core', description: 'EPUB output (reserved)') do |f|
       f.register_target('epub') { raise NotImplementedError }
     end
+
+    # Container packing/unpacking. No capabilities; exists so documents and
+    # layouts can gate on it via `requires: [container]`.
+    register('container', plugin: 'core', description: 'packed document container (.dmc/.dms)')
   end
 end

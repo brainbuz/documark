@@ -1,0 +1,22 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Emit every externally-sourced gem from Gemfile.lock as name:version lines,
+# suitable for `gem install` in the testing container. PATH-sourced gems
+# (documark core and monorepo plugins) are excluded — the container runs those
+# from the checked-out source tree via -Ilib, never from installed copies.
+#
+# Usage:
+#   script/export-gem-deps [path/to/Gemfile.lock]
+#   script/export-gem-deps | xargs gem install
+
+require 'bundler'
+
+lockfile = ARGV[0] || File.expand_path('../Gemfile.lock', __dir__)
+parser = Bundler::LockfileParser.new(File.read(lockfile))
+
+parser.specs.each do |spec|
+  next if spec.source.is_a?(Bundler::Source::Path)
+
+  puts "#{spec.name}:#{spec.version}"
+end
