@@ -5,6 +5,7 @@ require 'tmpdir'
 require 'rbconfig'
 require 'fileutils'
 require_relative 'test_helper'
+require_relative '../lib/documark/container'
 
 class DocumarkCliTest < Minitest::Test
   def run_cli(*args, stdin_data: nil)
@@ -462,6 +463,126 @@ class DocumarkCliTest < Minitest::Test
         # PDF assets extract into a temp dir, never beside the output.
         refute File.exist?(File.join(dest, 'style.css')), 'PDF target must not extract beside output'
         refute File.exist?(File.join(dest, 'img/logo.png')), 'PDF target must not extract beside output'
+      end
+    end
+  end
+
+  # ── stationery (.dms) ────────────────────────────────────────────────────
+
+  # Write a stationery source tree — a layout (.dml) whose stylesheet pulls a
+  # font in via url() — and return the .dml path.
+  def write_stationery_source(dir, css_name: 'paper.css', css_body: nil)
+    File.write(File.join(dir, 'paper.dml'), <<~DML)
+      !! documark layout
+      !! layout
+      ---
+      stylesheets:
+        - #{css_name}
+      ---
+      !! end
+    DML
+    FileUtils.mkdir_p(File.join(dir, 'fonts'))
+    File.binwrite(File.join(dir, 'fonts/serif.woff2'), Random.bytes(48))
+    File.write(File.join(dir, css_name),
+               css_body || "@font-face { font-family: S; src: url('fonts/serif.woff2'); }\nbody { color: navy; }\n")
+    File.join(dir, 'paper.dml')
+  end
+
+  def plain_document
+    <<~DOC
+      !! documark document
+      !! data
+      title: "Plain"
+      !! end
+
+      # Hello
+    DOC
+  end
+
+  def test_pack_layout_file_into_stationery_with_font_via_url
+    Dir.mktmpdir('documark-cli-test') do |tmpdir|
+      dml = write_stationery_source(tmpdir)
+      dms = File.join(tmpdir, 'paper.dms')
+
+      _stdout, stderr, status = run_cli('pack', '--input', dml, '--output', dms)
+
+      assert status.success?, stderr
+      packed = File.read(dms)
+      assert_match(/^!! assets\n/, packed)
+
+      # The stationery's assets section must carry both the stylesheet and the
+      # font it pulls in via url().
+      sections = Documark::Parser.split_documark_sections(packed)
+      refute_nil sections['assets']
+
+      Dir.mktmpdir('documark-cli-dms-decode') do |dest|
+        Documark::Container.decode_assets(sections['assets'], dest)
+        assert File.file?(File.join(dest, 'paper.css')), 'stationery should carry its stylesheet'
+        assert File.file?(File.join(dest, 'fonts/serif.woff2')), 'stationery should carry the url()-referenced font'
+      end
+    end
+  end
+
+  def test_process_with_stationery_extracts_assets_beside_output
+    Dir.mktmpdir('documark-cli-test') do |tmpdir|
+      dml = write_stationery_source(tmpdir)
+      dms = File.join(tmpdir, 'paper.dms')
+      _o, pack_err, pack_status = run_cli('pack', '--input', dml, '--output', dms)
+      assert pack_status.success?, pack_err
+
+      Dir.mktmpdir('documark-cli-render') do |dest|
+        # Move the self-contained stationery away from its source assets so the
+        # only way its css/font can appear beside the output is extraction.
+        moved_dms = File.join(dest, 'paper.dms')
+        FileUtils.mv(dms, moved_dms)
+
+        input = File.join(dest, 'plain.dm')
+        File.write(input, plain_document)
+        output = File.join(dest, 'out.html')
+
+        _stdout, stderr, status = run_cli(
+          'process', '--input', input, '--output', output, '--target', 'html', '--layout', moved_dms
+        )
+
+        assert status.success?, stderr
+        html = File.read(output)
+        assert_includes html, 'paper.css'
+
+        assert File.file?(File.join(dest, 'paper.css')), 'stationery stylesheet should be extracted beside output'
+        assert File.file?(File.join(dest, 'fonts/serif.woff2')), 'stationery font should be extracted beside output'
+      end
+    end
+  end
+
+  def test_process_document_assets_win_over_stationery_on_collision
+    Dir.mktmpdir('documark-cli-test') do |src|
+      # Stationery provides its own style.css.
+      write_stationery_source(src, css_body: "/* STATIONERY */\nbody { color: navy; }\n")
+      dms = File.join(src, 'paper.dms')
+      _o, pack_err, pack_status = run_cli('pack', '--input', File.join(src, 'paper.dml'), '--output', dms)
+      assert pack_status.success?, pack_err
+
+      Dir.mktmpdir('documark-cli-render') do |dest|
+        moved_dms = File.join(dest, 'paper.dms')
+        FileUtils.mv(dms, moved_dms)
+
+        # Build a document container that carries its OWN style.css (document wins).
+        File.write(File.join(dest, 'style.css'), "/* DOCUMENT */\nbody { color: crimson; }\n")
+        encoded = Documark::Container.encode_assets(['style.css'], dest)
+        input = File.join(dest, 'doc.dm')
+        File.write(input, "#{plain_document}!! assets\n#{encoded}!! end\n")
+        # Remove the loose style.css so only extraction can recreate it.
+        FileUtils.rm(File.join(dest, 'style.css'))
+
+        output = File.join(dest, 'out.html')
+        _stdout, stderr, status = run_cli(
+          'process', '--input', input, '--output', output, '--target', 'html', '--layout', moved_dms
+        )
+
+        assert status.success?, stderr
+        on_disk = File.read(File.join(dest, 'style.css'))
+        assert_includes on_disk, 'DOCUMENT', 'document style.css must win on collision'
+        refute_includes on_disk, 'STATIONERY', 'stationery style.css must not be the surviving copy'
       end
     end
   end

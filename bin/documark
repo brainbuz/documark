@@ -78,7 +78,9 @@ def process_action(config)
   doc = document['doc']
   data = document['data']
   data = data.merge(parse_defines(Array(config['define'])))
-  layout = read_layout(doc, config)
+  resolved_layout = read_layout(doc, config)
+  layout = resolved_layout['layout']
+  layout_assets = resolved_layout['assets']
 
   required = Array(data['requires']) | Array(layout['requires'])
   ordie { Documark::Plugins.require_features!(required, source: config['input']) }
@@ -109,7 +111,7 @@ def process_action(config)
   end
 
   target       = config['target']
-  tmp_asset_dir = extract_container_assets!(config, doc, target)
+  tmp_asset_dir = extract_assets_for_render(config, doc, layout_assets, target)
 
   begin
     handler = Documark::Targets.lookup(target)
@@ -124,25 +126,40 @@ def process_action(config)
   end
 end
 
-# When the document carries a trailing `!! assets` container section, decode
-# it so includes, images, and stylesheets resolve during rendering. Sets
-# config['asset_base'] to the extraction directory and returns the temp dir
-# that must be cleaned up (pdf/epub), or nil when no cleanup is required
-# (html extracts beside the output; markdown/text do not extract at all).
-def extract_container_assets!(config, doc, target)
-  return nil if doc['assets'].nil?
+# Decode any `!! assets` container sections so includes, images, and
+# stylesheets resolve during rendering. Two sources may contribute assets: a
+# stationery/layout file (layout_assets) and the document itself
+# (doc['assets']). Both extract into the SAME directory, stationery first and
+# the document second, so on a filename collision the document's copy is the
+# one left on disk (document wins).
+#
+# Extraction location follows the per-target rules: pdf/epub use a temp dir
+# (returned so the caller can clean it up), html extracts beside the output
+# (returns nil — no cleanup), markdown/text do not extract at all.
+def extract_assets_for_render(config, doc, layout_assets, target)
+  sources = [layout_assets, doc['assets']].compact
+  return nil if sources.empty?
 
+  dest, tmp = asset_extraction_dir(config, target)
+  return nil if dest.nil?
+
+  sources.each { |assets| ordie { Documark::Container.decode_assets(assets, dest) } }
+  config['asset_base'] = dest
+  tmp
+end
+
+# Resolve the extraction directory for a target. Returns [dest, cleanup_dir]
+# where cleanup_dir is non-nil only for temp dirs the caller must remove.
+# markdown/text return [nil, nil] to signal "do not extract".
+def asset_extraction_dir(config, target)
   case target
   when 'pdf', 'epub'
     tmp = Dir.mktmpdir('documark-assets-')
-    ordie { Documark::Container.decode_assets(doc['assets'], tmp) }
-    config['asset_base'] = tmp
-    tmp
+    [tmp, tmp]
   when 'html'
-    dest = File.dirname(File.expand_path(config['output']))
-    ordie { Documark::Container.decode_assets(doc['assets'], dest) }
-    config['asset_base'] = dest
-    nil
+    [File.dirname(File.expand_path(config['output'])), nil]
+  else
+    [nil, nil]
   end
 end
 
@@ -202,6 +219,7 @@ begin
     o.string  '-i', '--input',   'Input .dm file (or .dmc container for unpack)'
     o.string  '-o', '--output',  'Output file path (or destination directory for unpack)'
     o.string  '-t', '--target',  "Output format (#{valid_targets.join(', ')})"
+    o.string  '--layout',        'Layout or stationery (.dms) file; overrides default_layout from config'
     o.bool    '-v', '--verbose', 'Verbose output'
     o.string  '-c', '--config',  'Config file path'
     o.bool    '-d', '--debug',   'Show full stack traces on errors'

@@ -164,10 +164,99 @@ class DocumarkParserTest < Minitest::Test
         !! end
       DML
 
-      parsed = Documark::Parser.read_layout({}, { 'default_layout' => dml_path })
+      result = Documark::Parser.read_layout({}, { 'default_layout' => dml_path })
 
-      assert_equal 'wrapper', parsed['container_class']
-      assert_includes parsed['style'], '@media print'
+      assert_equal 'wrapper', result['layout']['container_class']
+      assert_includes result['layout']['style'], '@media print'
+      assert_nil result['assets']
+    end
+  end
+
+  def test_read_layout_returns_layout_and_assets_shape
+    result = Documark::Parser.read_layout({})
+
+    assert_kind_of Hash, result
+    assert_equal %w[assets layout].sort, result.keys.sort
+    assert_kind_of Hash, result['layout']
+    # The built-in default.dml carries no assets section.
+    assert_nil result['assets']
+  end
+
+  def test_read_layout_embedded_document_layout_wins_and_has_nil_assets
+    Dir.mktmpdir('documark-parser-test') do |tmpdir|
+      # A stationery file that would be used if the document had no layout.
+      dms_path = File.join(tmpdir, 'paper.dms')
+      File.write(dms_path, <<~DMS)
+        !! documark layout
+        !! layout
+        ---
+        container_class: stationery
+        ---
+        @media print {}
+        !! end
+        !! assets
+        SGVsbG8=
+        !! end
+      DMS
+
+      doc = { 'layout' => "---\ncontainer_class: embedded\n---\n@media screen {}\n" }
+      result = Documark::Parser.read_layout(doc, { 'layout' => dms_path })
+
+      assert_equal 'embedded', result['layout']['container_class']
+      assert_nil result['assets'], 'embedded document layout carries no assets'
+    end
+  end
+
+  def test_read_layout_stationery_file_returns_its_assets
+    Dir.mktmpdir('documark-parser-test') do |tmpdir|
+      dms_path = File.join(tmpdir, 'paper.dms')
+      File.write(dms_path, <<~DMS)
+        !! documark layout
+        !! layout
+        ---
+        container_class: stationery
+        ---
+        @media print {}
+        !! end
+        !! assets
+        SGVsbG8=
+        d29ybGQ=
+        !! end
+      DMS
+
+      result = Documark::Parser.read_layout({}, { 'layout' => dms_path })
+
+      assert_equal 'stationery', result['layout']['container_class']
+      refute_nil result['assets']
+      assert_includes result['assets'], 'SGVsbG8='
+      assert_includes result['assets'], 'd29ybGQ='
+    end
+  end
+
+  def test_read_layout_prefers_layout_over_default_layout
+    Dir.mktmpdir('documark-parser-test') do |tmpdir|
+      explicit = File.join(tmpdir, 'explicit.dml')
+      fallback = File.join(tmpdir, 'fallback.dml')
+      File.write(explicit, <<~DML)
+        !! documark layout
+        !! layout
+        ---
+        container_class: explicit
+        ---
+        !! end
+      DML
+      File.write(fallback, <<~DML)
+        !! documark layout
+        !! layout
+        ---
+        container_class: fallback
+        ---
+        !! end
+      DML
+
+      result = Documark::Parser.read_layout({}, { 'layout' => explicit, 'default_layout' => fallback })
+
+      assert_equal 'explicit', result['layout']['container_class']
     end
   end
 
