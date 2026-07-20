@@ -17,6 +17,7 @@ module Documark
 
     def render_page(options, layout, data, body)
       opts    = (layout || {}).merge("input_path" => options["input"], "data" => data)
+      opts["base_path"] = options['asset_base'] if options['asset_base']
       prepped = ordie { Documark::TagProcessor.preprocess(body, opts) }
       # Propagate emission flags set by the tag processor back onto the
       # layout hash so downstream renderers can see them.

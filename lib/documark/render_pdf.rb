@@ -94,7 +94,7 @@ module Documark
 
     # Run WeasyPrint against the composed HTML, writing the PDF to output_path.
     # Appends any default print CSS not already handled by the layout.
-    def render_pdf_with_weasy(page, output_path, layout = nil)
+    def render_pdf_with_weasy(page, output_path, layout = nil, base_url = nil)
       ordie do
         _require_weasyprint!
 
@@ -102,7 +102,9 @@ module Documark
           tmp.write(page + _pdf_feature_styles(layout))
           tmp.flush
 
-          args = ['weasyprint', tmp.path, output_path]
+          args = ['weasyprint']
+          args += ['--base-url', base_url] if base_url && !base_url.to_s.empty?
+          args += [tmp.path, output_path]
 
           _stdout, stderr, status = Open3.capture3(*args)
           unless status.success?
@@ -118,8 +120,8 @@ module Documark
     # document emitted an @(index) and the layout opts into
     # index.limit_entry_per_page, runs a second pass that drops same-page
     # repeats and re-renders.
-    def render_pdf(page, output_path, layout = nil)
-      render_pdf_with_weasy(page, output_path, layout)
+    def render_pdf(page, output_path, layout = nil, base_url = nil)
+      render_pdf_with_weasy(page, output_path, layout, base_url)
 
       index_opts = layout.is_a?(Hash) ? (layout['index'] || {}) : {}
       return unless layout.is_a?(Hash) && layout['index_emitted']
@@ -128,7 +130,7 @@ module Documark
       deduped = dedupe_index_pages(page, output_path)
       return if deduped.nil? || deduped == page
 
-      render_pdf_with_weasy(deduped, output_path, layout)
+      render_pdf_with_weasy(deduped, output_path, layout, base_url)
     end
   end
 end

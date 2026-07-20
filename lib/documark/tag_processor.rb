@@ -275,7 +275,7 @@ module Documark
         @index_entries  = []
         @index_counter  = 0
         input_path = opts["input_path"]
-        @base_path = input_path ? File.dirname(File.expand_path(input_path)) : Dir.pwd
+        @base_path = opts['base_path'] || (input_path ? File.dirname(File.expand_path(input_path)) : Dir.pwd)
       end
 
       # Splice raw markdown text into the line stream at position +pos+ so
