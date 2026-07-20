@@ -126,6 +126,32 @@ class DocumarkContainerTest < Minitest::Test
     end
   end
 
+  def test_discover_assets_layout_mode_with_nil_body
+    Dir.mktmpdir('documark-container') do |dir|
+      File.write(File.join(dir, 'paper.css'), "body { background: url('img/bg.png'); }\n")
+      FileUtils.mkdir_p(File.join(dir, 'img'))
+      File.write(File.join(dir, 'img/bg.png'), 'png')
+      FileUtils.mkdir_p(File.join(dir, 'fonts'))
+      File.write(File.join(dir, 'fonts/serif.woff2'), 'font')
+
+      # A stationery/layout has no body of its own — nil, not "".
+      sections = { 'body' => nil }
+      layout = {
+        'stylesheets' => ['paper.css', 'https://cdn.example/x.css'],
+        'style' => "@font-face { src: url('fonts/serif.woff2'); }"
+      }
+
+      result = nil
+      _out, _err = capture_io do
+        result = Documark::Container.discover_assets(sections, layout, dir)
+      end
+
+      # stylesheet, the url() in style, and the css-in-css url() all resolve;
+      # a nil body contributes nothing and raises nothing.
+      assert_equal ['fonts/serif.woff2', 'img/bg.png', 'paper.css'], result
+    end
+  end
+
   # ── pack_file / unpack_file ─────────────────────────────────────────────────
 
   def sample_document

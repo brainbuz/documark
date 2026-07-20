@@ -155,15 +155,27 @@ module Documark
       }
     end
 
+    # Resolve the layout for a document and return both the parsed layout and
+    # any assets that travel with it.
+    #
+    # Return shape: { 'layout' => <parsed layout hash>, 'assets' => <base64 String or nil> }
+    #
+    # An embedded document layout (a `layout` section in the document itself)
+    # always wins and carries no assets of its own. Otherwise the external
+    # layout file is resolved from config['layout'] (an explicit --layout /
+    # stationery file), then config['default_layout'], then the built-in
+    # default.dml; that file is split into sections so a stationery (.dms)
+    # layout file's own `!! assets` section rides along.
     def read_layout(doc, config = {})
       if doc["layout"]
-        parse_layout_section(doc["layout"])
-      else
-        layout_path = config['default_layout'] || File.expand_path('default.dml', __dir__)
-        dml = ordie { File.read(layout_path) }
-        tmpl = split_documark_sections(dml)
-        parse_layout_section(tmpl['layout'])
+        return { "layout" => parse_layout_section(doc["layout"]), "assets" => nil }
       end
+
+      layout_path = config['layout'] || config['default_layout'] || File.expand_path('default.dml', __dir__)
+      dml = ordie { File.read(layout_path) }
+      tmpl = split_documark_sections(dml)
+
+      { "layout" => parse_layout_section(tmpl['layout']), "assets" => tmpl['assets'] }
     end
   end
 end
