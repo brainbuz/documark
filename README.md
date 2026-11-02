@@ -22,7 +22,7 @@ That has two consequences:
 
 ## Documentation
 
-- [Specification](doc/spec.md)
+- [Specification](doc/documark_spec.md)
 - [Implementation Notes](doc/implementation.md)
 - [Layout Style Guide](doc/layout-style.md)
 - [Project Philosophy](doc/philosophy.md)
@@ -39,6 +39,9 @@ The current implementation can:
 - render Markdown content to HTML
 - render PDF from generated HTML via the WeasyPrint command-line renderer
 - write raw Markdown-style body output for `markdown` and `text` targets
+- conditionally include or exclude content with `@( if CONDITION begin ) ... @( else ) ... @( end )`, evaluated against document data and `--define` overrides, uniformly across every output target
+- pack a document (or layout) together with its local supporting files — images, stylesheets, includes — into a single portable container file, and unpack one back into a document plus its asset tree
+- render against an external layout or "stationery" file via `--layout`, including stationery files that carry their own packed assets
 
 Current output targets:
 
@@ -96,6 +99,8 @@ The executable is [bin/documark](bin/documark).
 Actions:
 
 - `process`
+- `pack`
+- `unpack`
 - `config_new`
 - `template_new`
 
@@ -107,6 +112,8 @@ Common options for `process`:
 - `--config` / `-c`
 - `--verbose` / `-v`
 - `--debug` / `-d`
+- `--define` — set a document data key (`key=value` or a bare `key`), repeatable; overrides the document's own `data` block, e.g. for `@( if )` conditions
+- `--layout` — layout or stationery (`.dms`) file to render against, overriding `default_layout` from config
 
 Example:
 
@@ -114,9 +121,21 @@ Example:
 bundle exec bin/documark process -i input.dm -o output.html -t html
 ```
 
+`pack` bundles a document (or layout) together with its discovered local assets into a single container file:
+
+```sh
+bundle exec bin/documark pack -i input.dm -o input.dmc
+```
+
+`unpack` reverses it, writing the document plus its extracted asset tree into a directory:
+
+```sh
+bundle exec bin/documark unpack -i input.dmc -o input-unpacked/
+```
+
 ## Plugins and Features
 
-Documark functionality is organized into named **features**. Built-in features (`markdown`, `html`, `pdf`, `text`, `epub`, `toc`, `index`, `include`) ship with every install. **Plugins** are independent Ruby files (typically in separate gems) that register additional features at startup. See `doc/documark_spec.md` §9 for the full contract.
+Documark functionality is organized into named **features**. Built-in features (`markdown`, `html`, `pdf`, `text`, `epub`, `toc`, `index`, `include`, `if`, `container`) ship with every install. **Plugins** are independent Ruby files (typically in separate gems) that register additional features at startup. See `doc/documark_spec.md` §9 for the full contract.
 
 A document or layout may declare a `requires:` array in its YAML to fail fast when an expected feature isn't available:
 

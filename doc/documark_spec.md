@@ -57,8 +57,11 @@ Supported block names:
 
 - `data`
 - `layout`
+- `assets`
 
 Blank lines between major sections are allowed.
+
+The `assets` block is a special top-level section, not an ordinary named block: when present it MUST be the last section in the file, and nothing but blank lines may follow its `!! end`. Rather than plain-text content it carries a packed archive of the document's (or layout's) supporting files. See section 11 for the wire format and the `pack`/`unpack` CLI actions that produce and consume it. Known caveat: the processor locates the body/assets boundary by scanning for the first column-0 line matching the `!! assets` header form, so a literal `!! assets` line at column 0 inside a body code fence will falsely trigger that boundary; see section 10.3 — this is a documented, accepted limitation rather than a bug slated for a fix.
 
 ## 4. Document File (`type=document`)
 
@@ -380,7 +383,7 @@ Every `@()` directive has one of two forms:
 - `<name>` is a lowercase identifier matching `[a-z][a-z0-9-]*` — the first word inside the parens.
 - `[args...]` is an opaque argument string between the name and `)` or `begin )`. Quoting is not required by the parser; directive handlers parse args themselves.
 - For the block form, all content between the opener and the matching `@( end )` is collected verbatim — no inline processing — and passed to the handler as the **content** argument.
-- `@( end )` is always literal `end`, never named; it closes the most recent block opener.
+- `@( end )` is always literal `end`, never named; it closes the most recent unclosed block opener. Matching is depth-aware: nested `@( x ... begin )` / `@( end )` pairs of the same directive shape increment and decrement an internal depth counter as they are scanned, so an `@( end )` only terminates the block once every nested opener of the same shape inside it has already been closed — it is not simply "the next `@( end )` seen."
 
 Unknown directive names are a hard error. Calling a block-only directive in single-line form (or vice versa) is also a hard error.
 
@@ -394,6 +397,7 @@ Unknown directive names are a hard error. Calling a block-only directive in sing
 | `@( include path type )` | Same, with explicit type. Built-in types are `markdown`, `html`, `text`; plugins may extend `include` with additional types (section 9). |
 | `@(# term)` | Inline only. Register `term` in the index with an anchor at this location |
 | `@# word` | Inline only. Shorthand for `@(# word)` where the term is a single letter-only word; also wraps the word in the anchor |
+| `@( if CONDITION begin )` ... [`@( else )`] ... `@( end )` | Conditionally include the true or else branch based on a condition evaluated against document `data` |
 | `@( name begin )` ... `@( end )` | Block directive — plugin- or core-handled raw content block |
 
 A line that starts with `@( include` but doesn't match the directive grammar (e.g. unquoted path with whitespace, mismatched quotes) is a hard error rather than silently passing through as literal text.
@@ -409,6 +413,7 @@ Rules:
 - A `@( end )` with no preceding opener is a hard error.
 - An unterminated opener (no closer before end of file) emits a warning and the remaining document body is treated as block content.
 - Content between the markers is raw and not subject to Documark tag processing.
+- The opener/closer scan is depth-aware (see the note on `@( end )` above): nested `@( x ... begin )` / `@( end )` pairs are correctly paired rather than the first `@( end )` closing the outermost opener. Known caveat: foreign block content shaped exactly like `@( x begin )` — for example a directive-shaped line quoted inside a `talltable`/`asciidoc` block's raw content — can still misfire the depth counter, since the scanner cannot tell "real" nested openers from lines that merely look like one; this is rare in practice and strictly better than the previous behavior, where the very first `@( end )` encountered closed the block regardless of nesting (section 10.2).
 
 **Currently registered block directives: `asciidoc`, `talltable`**
 
@@ -476,6 +481,44 @@ Hard-fail rules:
 - A bare include with an extension that doesn't match a known type falls back to `text` (so plain text files included without an explicit type still work).
 
 An included Markdown file shares index/TOC state with its parent: terms registered inside an included file appear in the parent's `@(index)`, and headings inside it appear in the parent's `@(toc)`.
+
+#### `@( if CONDITION begin )` / `@( else )` / `@( end )` — Conditional content
+
+Includes or excludes a span of document content depending on a condition evaluated against the document's `data` (the document's `data` block merged with any `--define` overrides). Grammar:
+
+```text
+@( if CONDITION begin )
+... kept when CONDITION is true ...
+@( else )
+... kept when CONDITION is false ...
+@( end )
+```
+
+`@( else )` is optional; when it is absent, a false condition simply produces no output for the block.
+
+Condition grammar — there are no boolean combinators (no `and`/`or`/parentheses); a condition is exactly one of:
+
+- `NAME` — truthy test on `data[NAME]`.
+- `!NAME` — negated truthy test.
+- `NAME=VALUE` — string equality. `VALUE` is everything after the first `=`, stripped, with one pair of matching surrounding quotes (`'...'` or `"..."`) removed if present; `VALUE` may be empty.
+
+`NAME` MUST match `[A-Za-z_][A-Za-z0-9_-]*` and refers to a top-level `data` key only — dotted or nested paths are not supported.
+
+Truthiness: a value is falsy if and only if it is missing (the key is absent from `data`), `nil`, `false`, an empty string (after stripping), or the string `"false"` compared case-insensitively. Every other value — including `0`, `"0"`, arrays, and hashes — is truthy.
+
+Equality: `NAME=VALUE` compares `data[NAME].to_s` (not stripped) against the literal `VALUE`. A missing key is always false, regardless of `VALUE`.
+
+`@( else )` and nesting rules:
+
+- `@( else )` splits the block at depth 0 only; an `@( else )` belonging to a nested `@( if ... begin )` is transparent to the split and stays with its own inner block.
+- A second depth-0 `@( else )` inside the same `if` block is a hard error.
+- An `@( else )` with no enclosing `@( if ... begin )` is a hard error.
+- An `if` nested inside a kept branch is reprocessed normally: inline tags (`@{}`, `@[]`, `@<>`) and nested directives inside the kept branch resolve exactly as if that branch had been typed directly into the document body.
+
+`@( if )` behaves uniformly across every output target, though two different code paths implement it:
+
+- For `html` and `pdf`, the built-in `if` directive is dispatched through the same depth-aware block-directive scanning described above, via `TagProcessor`'s `_scan_raw_block`.
+- For `markdown` and `text`, which do not go through `TagProcessor` at all, a standalone recursive pass (`Documark::Conditionals.resolve`) walks the raw document body before export, resolving `@( if )` blocks the same way and passing every other `@( x begin ) ... @( end )` block through untouched and uninterpreted, leaving it for the usual markdown/text cleanup pass to handle.
 
 ### 8.4 `@<>` — Inline Element Directives
 
@@ -581,6 +624,8 @@ Conforming implementations MUST register the following features at startup:
 | `toc` | The `@(toc)` directive |
 | `index` | The `@(index)` directive |
 | `include` | The `@( include )` directive |
+| `if` | The `@( if ... begin )` / `@( else )` / `@( end )` conditional block directive |
+| `container` | No directive of its own; gates `requires: [container]` for documents or layouts that rely on packed `.dmc`/`.dms` container files (section 11) |
 
 Authors MAY name any of these in `requires:` but typically omit them by convention, since they are present in every conforming implementation. An alternative implementation targeting constrained environments MAY load handlers lazily based on the declared `requires:` list, in which case exhaustive declaration becomes useful.
 
@@ -663,4 +708,70 @@ Documark's preprocessor currently scans tag syntax (`@{}`, `@[]`, `@<>`, `@()`) 
 This is undesirable: authors documenting Documark syntax inside a Documark document must escape every example with `\@`, even inside a code fence where the intent is plainly literal text.
 
 The likely future behaviour is for the preprocessor to recognise Markdown code spans and fences and skip them. Authors should for the present consider the behaviour of @tags in these regions to be undefined.
+
+### 10.2 Block Directive Depth Counter Can Misfire on Foreign Content
+
+The depth-aware scanning that pairs `@( x ... begin )` with its matching `@( end )` (section 8.3) works by counting any stripped line that matches the block-opener or `@( end )` shape, regardless of which directive is actually active. Foreign block content — for example raw AsciiDoc or another directive's raw content — that happens to contain a line shaped exactly like `@( something begin )` or `@( end )` will still increment or decrement the counter, even though it is not a real nested Documark block. This is rare in practice, and is strictly better than the previous implementation, where the very first `@( end )` encountered closed the outermost opener regardless of nesting. There is no plan to fix this beyond documenting it; authors embedding raw content that could contain such a line should be aware of it.
+
+### 10.3 `!! assets` Boundary Detection Inside Body Code Fences
+
+The parser locates the start of a document's trailing `!! assets` section (section 3.2, section 11) by scanning for the first line, at column 0, that parses as an `!! assets` header. It does not distinguish a real section boundary from a literal `!! assets` line that happens to appear at column 0 inside a body code fence (for example, a fenced example showing Documark's own container format). Such a line will falsely trigger the body/assets boundary, truncating the body early and misinterpreting whatever follows as the assets archive. This is a documented, accepted limitation, not a bug to be fixed; authors documenting Documark's own syntax should indent or otherwise avoid a column-0 `!! assets` line inside a body code fence.
+
+## 11. Container Format
+
+A Documark **container** bundles an ordinary document (or layout) file together with the local files it depends on — images, stylesheets, includes — into a single, still-readable file. Nothing about the document's own text sections changes; a container is a document with one extra section appended at the end.
+
+### 11.1 Wire Format
+
+A container is the document's ordinary content — header, `data`, `layout`, and body sections exactly as sections 3 through 6 define them — followed by a top-level `assets` block:
+
+```text
+!! assets
+<base64 of a gzipped POSIX tar archive>
+!! end
+```
+
+Per section 3.2, this `assets` block MUST be the last section in the file; nothing but blank lines may follow its `!! end`. Text sections are never touched by packing — they remain plain-text and readable even in a packed file; only the supporting files travel as an opaque archive.
+
+### 11.2 Path Validation (Security Boundary)
+
+Every path referenced inside the archive — on both pack (encoding) and unpack (decoding) — MUST pass the same validation, which is the security boundary against path traversal and absolute-path writes: relative (no leading `/`), `/`-separated with no backslashes, no `.` or `..` path segments and no empty segments (so `a//b` and `a/` are both rejected), and no NUL bytes. Because this validation runs on both the encode and decode paths, a hostile or malformed archive — one with a `../../etc/passwd`-style entry, for instance — cannot be produced by `pack` in the first place, and if such an archive were somehow constructed by hand, `unpack` refuses it rather than writing outside the destination directory.
+
+### 11.3 Asset Discovery When Packing
+
+When packing a document, Documark discovers its local supporting files by scanning `@( include ... )` directive arguments in the body, Markdown image references (`![alt](path)`), the layout's `stylesheets` entries, `url(...)` references inside the layout's `style` CSS text, and one level of recursion into any discovered local `.css` file so that file's own `url(...)` references (for example, `@font-face` font files) are picked up too. References that are URLs (`http:`, `https:`, or any other URI scheme), `data:` URIs, `mailto:` links, fragment-only references (`#...`), or absolute paths are skipped — only relative, local, on-disk files are candidates. A discovered reference to a file that doesn't exist on disk produces a warning and is skipped rather than failing the pack.
+
+### 11.4 Per-Target Extraction
+
+When `process` runs against a container (or a document paired with a stationery/layout container — section 12), assets are extracted differently depending on the output target: **`html`** extracts beside the output file and leaves the extracted files there after the run completes, so the rendered page's relative asset references keep working afterward; **`pdf`/`epub`** extract into a temporary directory that WeasyPrint is pointed at via `--base-url`, then removed once rendering finishes; **`markdown`/`text`** extract nothing, since these targets emit raw body text and have no notion of a base URL for relative assets.
+
+### 11.5 CLI
+
+```sh
+bundle exec bin/documark pack --input mydoc.dm --output mydoc.dmc
+bundle exec bin/documark unpack --input mydoc.dmc --output mydoc-unpacked/
+```
+
+`pack` reads `--input`, discovers its assets, and writes a container to `--output`. Packing a file that is already a container (it already has an `!! assets` section) is a hard error — unpack it first. `unpack` reads a container at `--input`, writes its document (minus the `assets` section, with a `.dml` extension if the original declared `type=layout` and `.dm` otherwise) plus its extracted asset tree into the `--output` directory. Unpacking a file with no `!! assets` section is a hard error.
+
+## 12. Stationery
+
+**Stationery** is not a new file format — it is simply the name for an external layout file (conventionally given a `.dms` extension) that also carries a trailing `!! assets` section. There is no special stationery header or block; a stationery file still begins with the ordinary layout header (`!! documark layout`) described in section 5, and becomes a stationery file purely by having `pack` (section 11) applied to a `.dml` file.
+
+### 12.1 The `--layout` Option
+
+`--layout <file>` names a layout or stationery file to use for a `process` run, overriding the `default_layout` value from config. Precedence, most specific first:
+
+1. An embedded document `layout` block (section 5) — if the document itself carries a `layout` section, it always wins over `--layout` and `default_layout`, and it carries no assets of its own; assets only ever come from an *external* layout file.
+2. `--layout` (or the config file's equivalent).
+3. `default_layout` from config.
+4. The built-in default layout template.
+
+### 12.2 Asset Extraction Ordering
+
+A `process` run can pull assets from two sources at once: the resolved stationery/layout file (if it is itself a container) and the document's own `!! assets` section (if the document itself is a container). Both extract into the same destination directory — stationery assets first, then the document's assets. On a filename collision between the two, the document's copy is what ends up on disk, since it is written second. Per-target extraction semantics are identical to section 11.4 (`html` beside the output and left in place, `pdf`/`epub` to a cleaned-up temporary directory, `markdown`/`text` none).
+
+### 12.3 Packing a Layout File
+
+`pack` also works on a layout-type file (one whose header is `!! documark layout`). Since a layout file has no document body to scan, asset discovery for a layout-type pack considers only layout sources: `stylesheets` entries, `url(...)` references in the `style` CSS text, and the same one-level `.css`-file recursion described in section 11.3. The resulting `.dms` file is read back exactly like any other layout file — via `--layout`, `default_layout`, or the built-in default — its assets riding along automatically.
 
