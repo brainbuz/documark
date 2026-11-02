@@ -120,7 +120,7 @@ The handler wrote directly to `ctx` itself. Advanced — used by the built-in `t
 
 ## A complete plugin
 
-The built-in AsciiDoc plugin at `lib/documark/plugin/asciidoc.rb` is the canonical reference:
+The AsciiDoc plugin at `plugins/asciidoc/lib/documark/plugin/asciidoc.rb` is the canonical reference:
 
 ```ruby
 # frozen_string_literal: true

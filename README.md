@@ -149,7 +149,7 @@ requires:
 !! end
 ```
 
-This repository ships a reference `asciidoc` plugin at `lib/documark/plugin/asciidoc.rb`. It activates `@( include 'foo.adoc' )` by routing the file through Asciidoctor. In monorepo development and CI, the Gemfile resolves this plugin from the local path so tests always run against checked-out code.
+This repository includes the optional `asciidoc` plugin as a separate gem under `plugins/asciidoc/`. It activates `@( include 'foo.adoc' )` by routing the file through Asciidoctor. In monorepo development and CI, the Gemfile resolves this plugin from the local path so tests always run against checked-out code. Installing the core `documark` gem alone does not install or load AsciiDoc dependencies.
 
 ```sh
 bundle install
