@@ -682,7 +682,7 @@ Discovery finding zero plugin files (no plugin gems installed) is normal and not
 
 ### 9.7 Reference Implementation: AsciiDoc Plugin
 
-This repository ships a reference plugin at `lib/documark/plugin/asciidoc.rb`. When loaded, it registers two features:
+This repository includes the reference plugin at `plugins/asciidoc/lib/documark/plugin/asciidoc.rb`, packaged as the separate `documark-plugin-asciidoc` gem. When installed and loaded, it registers two features:
 
 **Feature `asciidoc`:**
 
