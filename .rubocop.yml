@@ -1,0 +1,29 @@
+# frozen_string_literal: true
+
+# Project conventions: doc/devnotes/style-guide.md
+
+AllCops:
+  NewCops: enable
+  TargetRubyVersion: 3.2
+  Exclude:
+    - 'coverage/**/*'
+    - '.bundle/**/*'
+    - '.ruby-lsp/**/*'
+    - 'vendor/**/*'
+    - 'test/fixtures/**/*'
+
+# Require the frozen-string comment on every Ruby file.
+Style/FrozenStringLiteralComment:
+  Enabled: true
+  EnforcedStyle: always
+
+# Application data uses string keys; see the guide for API-specific exceptions.
+Style/StringHashKeys:
+  Enabled: false
+
+# Choose quotation marks for readability rather than enforcing one style.
+Style/StringLiterals:
+  Enabled: false
+
+Style/StringLiteralsInInterpolation:
+  Enabled: false
